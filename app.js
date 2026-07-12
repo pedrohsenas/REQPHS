@@ -482,6 +482,8 @@ function render() {
    TELA: INÍCIO — projetos e listas
    ============================================================ */
 function telaInicio(app) {
+  const rms = [...listas].reverse().filter(l => (l.tipo || "RM") !== "MM");
+  const mms = [...listas].reverse().filter(l => l.tipo === "MM");
   const cartaoLista = (l) => {
     const proj = projetos.find(p => p.id === l.projetoId);
     return `<div class="cartao ${l.status === "concluida" ? "concluida" : ""}">
@@ -516,10 +518,14 @@ function telaInicio(app) {
       <button class="btn sec" id="btn-novo-projeto">+ Novo projeto</button>
     </div>
     ${projetos.length ? `<div class="secao-titulo">Projetos</div><div class="grade-cartoes">${projetos.map(cartaoProjeto).join("")}</div>` : ""}
-    <div class="secao-titulo">Requisições</div>
-    ${listas.length
-      ? `<div class="grade-cartoes">${[...listas].reverse().map(cartaoLista).join("")}</div>`
-      : `<div class="vazio">Nenhuma lista ainda.<br><br><button class="btn" id="btn-nova-lista-2">Criar a primeira lista</button></div>`}
+    <div class="secao-titulo">Requisições (RM)</div>
+    ${rms.length
+      ? `<div class="grade-cartoes">${rms.map(cartaoLista).join("")}</div>`
+      : `<div class="vazio">Nenhuma requisição ainda.<br><br><button class="btn" id="btn-nova-lista-2">Criar a primeira requisição</button></div>`}
+    <div class="secao-titulo">Cadastros de Mínimo e Máximo (MM)</div>
+    ${mms.length
+      ? `<div class="grade-cartoes">${mms.map(cartaoLista).join("")}</div>`
+      : `<div class="vazio">Nenhum cadastro de mín/máx ainda — use o botão “+ Cadastro Mín/Máx (MM)”.</div>`}
   `;
 
   const criarLista = () => {
@@ -819,27 +825,78 @@ function telaEditor(app, id) {
     setTimeout(() => { document.title = tituloAntes; }, 500);
   };
 
-  /* gera um ARQUIVO .pdf (funciona no celular) e abre o compartilhar do sistema */
+  /* ---------- PDF: clona a folha trocando campos por texto e pagina manualmente ---------- */
+  function clonarFolhaParaPdf() {
+    const orig = $(".folha");
+    const clone = orig.cloneNode(true);
+    clone.style.zoom = "1";
+    clone.style.width = "1123px";
+    clone.style.boxShadow = "none";
+    clone.style.padding = "0";
+    clone.style.margin = "0";
+    const eOrig = [...orig.querySelectorAll("input, textarea, select")];
+    const eClone = [...clone.querySelectorAll("input, textarea, select")];
+    eClone.forEach((el, i) => {
+      const o = eOrig[i];
+      let txt = "";
+      if (o.tagName === "SELECT") txt = o.value ? (o.selectedOptions[0] ? o.selectedOptions[0].textContent : "") : "";
+      else if (o.type === "date") txt = dataBR(o.value);
+      else txt = o.value;
+      const span = document.createElement("span");
+      span.textContent = txt;
+      const st = getComputedStyle(o);
+      if (o.closest("td.d-preco")) {   // R$ à esquerda, número à direita
+        span.style.cssText = "display:inline-block;width:calc(100% - 18px);float:right;text-align:right";
+      } else {
+        span.style.cssText = `display:block;white-space:pre-wrap;overflow:hidden;text-align:${st.textAlign};font-weight:${st.fontWeight};min-height:11px`;
+      }
+      el.replaceWith(span);
+    });
+    clone.querySelectorAll(".no-print, td.d-remover, .d-ass-troca").forEach(el => el.remove());
+    clone.querySelectorAll("tr.d-vazia").forEach(el => el.remove());   // sem linhas em branco, como no oficial
+    clone.querySelectorAll("col.cX").forEach(c => { c.style.width = "0"; });
+    return clone;
+  }
+
+  async function gerarPdfBlob() {
+    const clone = clonarFolhaParaPdf();
+    const palco = document.createElement("div");
+    palco.style.cssText = "position:fixed;left:-12000px;top:0;width:1123px;background:#fff;z-index:-1";
+    palco.appendChild(clone);
+    document.body.appendChild(palco);
+    try {
+      await new Promise(r => setTimeout(r, 80));   // deixa as imagens assentarem
+      const canvas = await html2canvas(clone, { scale: 2, backgroundColor: "#ffffff", windowWidth: 1200, useCORS: true });
+      const { jsPDF } = window.jspdf;
+      const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "landscape" });
+      const margem = 6;
+      const pw = 297 - margem * 2;                              // largura útil da página
+      const ph = 210 - margem * 2;                              // altura útil
+      const pagPx = Math.floor(canvas.width * (ph / pw));       // altura de 1 página em px do canvas
+      let y = 0, primeira = true;
+      while (y < canvas.height) {
+        const fatia = Math.min(pagPx, canvas.height - y);
+        const c2 = document.createElement("canvas");
+        c2.width = canvas.width; c2.height = fatia;
+        c2.getContext("2d").drawImage(canvas, 0, y, canvas.width, fatia, 0, 0, canvas.width, fatia);
+        if (!primeira) pdf.addPage();
+        pdf.addImage(c2.toDataURL("image/jpeg", 0.95), "JPEG", margem, margem, pw, fatia * (pw / canvas.width));
+        primeira = false;
+        y += fatia;
+      }
+      return pdf.output("blob");
+    } finally {
+      palco.remove();
+    }
+  }
+
+  /* gera o ARQUIVO .pdf (funciona no celular) e abre o compartilhar do sistema */
   $("#btn-pdf").onclick = async () => {
     const btn = $("#btn-pdf");
     btn.disabled = true; btn.textContent = "Gerando…";
     try {
       const nome = nomePdf() + ".pdf";
-      const zoomAntes = $(".folha").style.zoom;
-      $(".folha").style.zoom = "";                            // captura em tamanho real
-      document.body.classList.add("modo-pdf");
-      await new Promise(r => setTimeout(r, 60));
-      const blob = await html2pdf().set({
-        margin: 5,
-        filename: nome,
-        image: { type: "jpeg", quality: 0.97 },
-        html2canvas: { scale: 2, useCORS: true, windowWidth: 1180 },
-        jsPDF: { unit: "mm", format: "a4", orientation: "landscape" },
-        pagebreak: { mode: ["css", "legacy"] },
-      }).from($(".folha")).outputPdf("blob");
-      document.body.classList.remove("modo-pdf");
-      $(".folha").style.zoom = zoomAntes;
-
+      const blob = await gerarPdfBlob();
       const arquivo = new File([blob], nome, { type: "application/pdf" });
       if (navigator.canShare && navigator.canShare({ files: [arquivo] })) {
         try { await navigator.share({ files: [arquivo], title: nomePdf() }); }
@@ -848,7 +905,6 @@ function telaEditor(app, id) {
         baixarBlob(blob, nome);
       }
     } catch (e) {
-      document.body.classList.remove("modo-pdf");
       alert("Erro ao gerar o PDF: " + e.message);
     }
     btn.disabled = false; btn.textContent = "📤 PDF";
@@ -1020,10 +1076,10 @@ function telaEditor(app, id) {
         <col class="cA"><col class="cB"><col class="cC"><col class="cD"><col class="cE"><col class="cF"><col class="cX">
       </colgroup>
       <tr>
-        <td class="d-logo"><img src="favicon.svg" alt="Lar" onerror="this.outerHTML='<b style=\'font-size:22px;color:#d5203b\'>Lar</b>'"></td>
+        <td class="d-logo"><img src="logo.png" alt="Lar" onerror="this.outerHTML='<b style=\'font-size:22px;color:#d5203b\'>Lar</b>'"></td>
         <td class="d-titulo" colspan="2">REQUISIÇÃO DE MATERIAL</td>
         <td class="d-numero" colspan="2"><span class="rotulo">NÚMERO</span><input data-l="numeroFO" value="${esc(L.numeroFO)}"></td>
-        <td class="d-anexos"><img src="icone_pdf.png" alt="" onerror="this.remove()"><img src="icone_doc.png" alt="" onerror="this.remove()"></td>
+        <td class="d-anexos"><img src="icone_doc.png" alt="" onerror="this.remove()"><img src="icone_pdf.png" alt="" onerror="this.remove()"></td>
         <td class="d-remover no-print"></td>
       </tr>
       <tr class="d-rot-min">
@@ -1125,7 +1181,7 @@ function telaEditor(app, id) {
 
       <!-- cabeçalho: logo | título | bloco Número/Emissão/Revisão/No. -->
       <tr>
-        <td class="d-logo"><img src="favicon.svg" alt="Lar" onerror="this.outerHTML='<b style=\'font-size:22px;color:#d5203b\'>Lar</b>'"></td>
+        <td class="d-logo"><img src="logo.png" alt="Lar" onerror="this.outerHTML='<b style=\'font-size:22px;color:#d5203b\'>Lar</b>'"></td>
         <td class="d-titulo" colspan="6">RELAÇÃO DE MÍNIMOS E MÁXIMOS PARA COMPRA</td>
         <td style="padding:0">
           <table class="mm-num">
