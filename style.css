@@ -105,6 +105,7 @@ table.app tr:last-child td{border-bottom:none}
 .resultado .desc{flex:1; font-size:13px}
 .resultado .un{font-size:11px; color:var(--cinza)}
 .resultado .preco-hist{font-size:11px; color:var(--verde); white-space:nowrap}
+.badge-inativo{background:#eee; color:#a00; border:1px solid #d99; border-radius:4px; font-size:9px; padding:0 4px; font-weight:700; vertical-align:middle}
 .contagem{font-size:11px; color:var(--cinza); margin-top:6px}
 .dica{font-size:12px; color:var(--cinza); background:var(--fundo); border-radius:6px; padding:8px 10px; margin-top:10px}
 
@@ -143,7 +144,8 @@ td.d-logo img{height:13mm; max-width:90%; object-fit:contain; display:block; mar
 td.d-titulo{font-size:17px; font-weight:700; text-align:center}
 td.d-numero{font-weight:700; vertical-align:top; font-size:10px}
 td.d-numero .rotulo{display:block}
-td.d-anexos{background:#fff}
+td.d-anexos{background:#fff; text-align:center; white-space:nowrap}
+td.d-anexos img{height:8.5mm; margin:0 1.5mm; vertical-align:middle}
 
 .d-rot-min{font-size:8.5px; padding:0 3px; height:12px}
 .d-rot-cent{font-weight:700; text-align:center; font-size:10px}

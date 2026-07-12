@@ -41,10 +41,10 @@
 <div id="modal-banco" class="modal no-print" hidden>
   <div class="modal-caixa">
     <h2>Banco de itens</h2>
-    <p>Selecione o arquivo <strong>.xlsx</strong> exportado do sistema da empresa (aba <em>RelacaoDeProdutos</em>, colunas CÓDIGO / DESCRIÇÃO / UN / SITUAÇÃO) ou um <strong>.json</strong> gerado pelo conversor.</p>
-    <p class="aviso">Os dados ficam salvos apenas neste navegador (IndexedDB). Nada é enviado para a internet.</p>
-    <label class="check"><input type="checkbox" id="chk-apenas-ativos" checked> Importar apenas itens com situação “Ativo”</label>
+    <p>Selecione o arquivo <strong>.xlsx</strong> exportado do sistema da empresa (aba <em>RelacaoDeProdutos</em>). A carga <strong>mescla</strong> com o banco atual: adiciona itens novos, atualiza descrições/unidades dos existentes e <strong>desativa</strong> os que não constam mais.</p>
     <input type="file" id="arquivo-banco" accept=".xlsx,.xlsm,.json">
+    <p style="margin-top:14px">Para o banco valer <strong>em todos os computadores</strong>, baixe o resultado da mesclagem e substitua o arquivo <code>dados/banco.json</code> no repositório do site:</p>
+    <button class="btn sec" id="btn-baixar-banco">⬇ Baixar banco.json (para publicar no site)</button>
     <div id="progresso-banco" class="progresso" hidden></div>
     <div class="modal-acoes">
       <button class="btn sec" data-fechar>Fechar</button>

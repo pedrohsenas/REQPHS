@@ -40,6 +40,7 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 const hoje = () => new Date().toISOString().slice(0, 10);
 const fmtBR = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const dinheiro = (v) => "R$ " + fmtBR.format(v || 0);
+const EMISSAO_MODELO = "12/02/26";   // data de emissão do FORMULÁRIO padrão (fixa, não muda por lista)
 const dataBR = (iso) => { if (!iso) return ""; const [a, m, d] = iso.split("-"); return `${d}/${m}/${a}`; };
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -101,36 +102,52 @@ const IDB = {
 };
 
 function indexarBanco(itens) {
-  BANCO = itens.map(([c, d, u]) => {
+  // formato: [código, descrição, unidade, ativo?]  (ativo ausente = 1)
+  BANCO = itens.map(([c, d, u, a]) => {
     const n = norm(d) + " " + String(c);
-    return { c: String(c), d: String(d), u: String(u || "UN"), n, ns: semEspaco(n) };
+    return { c: String(c), d: String(d), u: String(u || "UN"), a: a === 0 ? 0 : 1, n, ns: semEspaco(n) };
   });
+}
+
+/* aceita "em" antigo em dd/mm/aaaa e novo em ISO */
+function tempoDe(reg) {
+  if (!reg || !reg.em) return 0;
+  let em = reg.em;
+  if (/^\d{2}\//.test(em)) { const [d, m, a] = em.split("/"); em = `${a}-${m}-${d}`; }
+  const t = Date.parse(em);
+  return isNaN(t) ? 0 : t;
 }
 
 async function carregarBanco() {
   const st = $("#status-banco");
   try {
-    const salvo = await IDB.ler("banco");
-    if (salvo && salvo.itens && salvo.itens.length) {
-      indexarBanco(salvo.itens);
-      st.textContent = `banco: ${BANCO.length.toLocaleString("pt-BR")} itens (${salvo.em || "importado"})`;
-      st.className = "status-banco ok";
-      return;
-    }
-    // sem banco no navegador: tenta dados/banco.json (repositório privado) ou exemplo
+    const local = await IDB.ler("banco").catch(() => null);
+    let web = null, urlWeb = "";
     for (const url of ["dados/banco.json", "dados/banco.exemplo.json"]) {
       try {
         const r = await fetch(url, { cache: "no-cache" });
         if (!r.ok) continue;
-        const j = await r.json();
-        indexarBanco(j.itens);
-        st.textContent = `banco: ${BANCO.length.toLocaleString("pt-BR")} itens (${url.includes("exemplo") ? "EXEMPLO — importe o real" : "do repositório"})`;
-        st.className = "status-banco ok";
-        return;
+        web = await r.json(); urlWeb = url; break;
       } catch { /* tenta o próximo */ }
     }
-    st.textContent = "banco: vazio — clique em “Banco de itens” para importar o .xlsx";
-    st.className = "status-banco erro";
+    // escolhe a fonte mais recente (permite atualizar via repositório OU via importação local)
+    const escolhido = (tempoDe(local) >= tempoDe(web) && local && local.itens && local.itens.length)
+      ? { reg: local, origem: "deste navegador" }
+      : (web && web.itens && web.itens.length ? { reg: web, origem: urlWeb.includes("exemplo") ? "EXEMPLO — importe o real" : "do site (dados/banco.json)" } : null);
+
+    if (!escolhido) {
+      st.textContent = "banco: vazio — clique em “Banco de itens” para importar o .xlsx";
+      st.className = "status-banco erro";
+      return;
+    }
+    if (escolhido.reg === web && tempoDe(web) > tempoDe(local)) {
+      await IDB.gravar("banco", web).catch(() => {});   // sincroniza a cópia local
+    }
+    indexarBanco(escolhido.reg.itens);
+    const ativos = BANCO.filter(i => i.a).length;
+    const quando = tempoDe(escolhido.reg) ? " · " + dataBR(new Date(tempoDe(escolhido.reg)).toISOString().slice(0, 10)) : "";
+    st.textContent = `banco: ${ativos.toLocaleString("pt-BR")} ativos de ${BANCO.length.toLocaleString("pt-BR")} (${escolhido.origem}${quando})`;
+    st.className = "status-banco ok";
   } catch (e) {
     st.textContent = "banco: erro ao carregar (" + e.message + ")";
     st.className = "status-banco erro";
@@ -138,16 +155,17 @@ async function carregarBanco() {
 }
 
 /* ---------------- importação do .xlsx da empresa ---------------- */
-async function importarArquivoBanco(arquivo, apenasAtivos) {
+async function importarArquivoBanco(arquivo) {
   const prog = $("#progresso-banco");
   prog.hidden = false;
   prog.textContent = "Lendo arquivo… (o de 19 MB leva alguns segundos)";
   await new Promise(r => setTimeout(r, 30)); // deixa a UI respirar
 
-  let itens = [];
+  /* --- lê o arquivo novo: [codigo, descricao, un, ativo] --- */
+  let novos = [];
   if (/\.json$/i.test(arquivo.name)) {
     const j = JSON.parse(await arquivo.text());
-    itens = j.itens || j;
+    novos = (j.itens || j).map(([c, d, u, a]) => [String(c), String(d), String(u || "UN"), a === 0 ? 0 : 1]);
   } else {
     const buf = await arquivo.arrayBuffer();
     prog.textContent = "Interpretando planilha…";
@@ -155,7 +173,6 @@ async function importarArquivoBanco(arquivo, apenasAtivos) {
     const wb = XLSX.read(buf, { type: "array" });
     const ws = wb.Sheets[wb.SheetNames.find(n => /relacao/i.test(n)) || wb.SheetNames[0]];
     const linhas = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
-    // localiza a linha de cabeçalho (CÓDIGO / DESCRIÇÃO / UN)
     let cab = -1, col = {};
     for (let i = 0; i < Math.min(linhas.length, 60); i++) {
       const l = linhas[i] || [];
@@ -178,19 +195,62 @@ async function importarArquivoBanco(arquivo, apenasAtivos) {
       const l = linhas[i] || [];
       const codigo = pega(l, col.codigo), desc = pega(l, col.desc);
       if (!codigo || !desc) continue;
-      if (apenasAtivos && col.sit != null && norm(pega(l, col.sit)) !== "ATIVO") continue;
-      itens.push([codigo, desc, pega(l, col.un) || "UN"]);
+      const ativo = (col.sit == null) ? 1 : (norm(pega(l, col.sit)) === "ATIVO" ? 1 : 0);
+      novos.push([codigo, desc, pega(l, col.un) || "UN", ativo]);
       if (i % 20000 === 0) { prog.textContent = `Processando… ${i.toLocaleString("pt-BR")} linhas`; await new Promise(r => setTimeout(r, 0)); }
     }
   }
-  if (!itens.length) throw new Error("Nenhum item encontrado no arquivo.");
+  if (!novos.length) throw new Error("Nenhum item encontrado no arquivo.");
+
+  /* --- mescla: adiciona novos, atualiza existentes, desativa ausentes --- */
+  prog.textContent = "Mesclando com o banco atual…";
+  await new Promise(r => setTimeout(r, 20));
+  const anterior = new Map(BANCO.map(i => [i.c, [i.c, i.d, i.u, i.a]]));
+  const vistos = new Set();
+  let qNovos = 0, qAtualizados = 0, qReativados = 0, qDesativados = 0;
+
+  for (const [c, d, u, a] of novos) {
+    vistos.add(c);
+    const ant = anterior.get(c);
+    if (!ant) { anterior.set(c, [c, d, u, a]); qNovos++; continue; }
+    if (ant[3] === 0 && a === 1) qReativados++;
+    else if (ant[1] !== d || ant[2] !== u || ant[3] !== a) qAtualizados++;
+    anterior.set(c, [c, d, u, a]);           // sobrescreve nome/unidade/situação
+  }
+  // desativa o que sumiu do arquivo — só quando o arquivo parece ser a base completa
+  const baseCompleta = novos.length >= anterior.size * 0.5;
+  if (baseCompleta) {
+    for (const [c, reg] of anterior) {
+      if (!vistos.has(c) && reg[3] === 1) { reg[3] = 0; qDesativados++; }
+    }
+  }
+
+  const itens = [...anterior.values()];
   prog.textContent = "Salvando no navegador…";
-  await IDB.gravar("banco", { itens, em: dataBR(hoje()) });
+  const registro = { v: 2, em: new Date().toISOString(), itens };
+  await IDB.gravar("banco", registro);
   indexarBanco(itens);
-  prog.textContent = `Pronto! ${itens.length.toLocaleString("pt-BR")} itens disponíveis para busca.`;
+
+  prog.innerHTML = `<strong>Mesclagem concluída:</strong> ${qNovos.toLocaleString("pt-BR")} novos · `
+    + `${qAtualizados.toLocaleString("pt-BR")} atualizados · ${qReativados.toLocaleString("pt-BR")} reativados · `
+    + `${qDesativados.toLocaleString("pt-BR")} desativados`
+    + (baseCompleta ? "" : "<br>⚠️ Arquivo pequeno em relação ao banco atual: nada foi desativado (parece uma carga parcial).")
+    + `<br>Total agora: ${itens.length.toLocaleString("pt-BR")} itens. `
+    + `Para valer em todos os computadores, clique em “Baixar banco.json” e substitua o arquivo <code>dados/banco.json</code> no repositório.`;
   const st = $("#status-banco");
-  st.textContent = `banco: ${BANCO.length.toLocaleString("pt-BR")} itens (${dataBR(hoje())})`;
+  st.textContent = `banco: ${itens.filter(i => i[3] === 1).length.toLocaleString("pt-BR")} ativos de ${itens.length.toLocaleString("pt-BR")} (deste navegador · ${dataBR(hoje())})`;
   st.className = "status-banco ok";
+}
+
+/* baixa o banco mesclado para publicar no repositório (dados/banco.json) */
+async function baixarBancoJson() {
+  const reg = await IDB.ler("banco");
+  if (!reg || !reg.itens || !reg.itens.length) { alert("Não há banco importado neste navegador ainda."); return; }
+  const blob = new Blob([JSON.stringify(reg)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "banco.json";
+  a.click();
 }
 
 /* ---------------- busca ---------------- */
@@ -211,7 +271,7 @@ function buscar(consulta, ignorarEspacos, limite = 60) {
     if (ok) {
       // pontuação simples: começo da descrição vale mais
       const pos = it.n.indexOf(termos[0]);
-      achados.push({ it, pos: pos < 0 ? 999 : pos });
+      achados.push({ it, pos: (pos < 0 ? 999 : pos) + (it.a ? 0 : 10000) });
       if (achados.length >= 400) break;   // já há resultados de sobra
     }
   }
@@ -455,7 +515,7 @@ function telaEditor(app, id) {
     alvo.innerHTML = resultadosAtuais.map((r, i) => {
       const ph = precoLembrado({ codigo: r.c, descricao: r.d });
       return `<div class="resultado ${i === selecionado ? "ativo" : ""}" data-i="${i}">
-        <span class="cod">${esc(r.c)}</span><span class="desc">${esc(r.d)}</span>
+        <span class="cod">${esc(r.c)}</span><span class="desc">${esc(r.d)}${r.a ? "" : ' <span class="badge-inativo">DESATIVADO</span>'}</span>
         <span class="un">${esc(r.u)}</span>${ph ? `<span class="preco-hist">${dinheiro(ph)}</span>` : ""}
       </div>`;
     }).join("");
@@ -545,7 +605,7 @@ function telaEditor(app, id) {
         <td class="d-logo" rowspan="1"><img src="favicon.svg" alt="Lar" onerror="this.outerHTML='<b style=\'font-size:22px;color:#d5203b\'>Lar</b>'"></td>
         <td class="d-titulo" colspan="2">REQUISIÇÃO DE MATERIAL</td>
         <td class="d-numero" colspan="2"><span class="rotulo">NÚMERO</span><input data-l="numeroFO" value="${esc(L.numeroFO)}"></td>
-        <td class="d-anexos"></td><td class="d-remover no-print"></td>
+        <td class="d-anexos"><img src="icone_pdf.png" alt="" onerror="this.remove()"><img src="icone_doc.png" alt="" onerror="this.remove()"></td><td class="d-remover no-print"></td>
       </tr>
       <tr class="d-rot-min">
         <td>LOCAL</td><td colspan="2">ÁREA/SETOR</td>
@@ -554,7 +614,7 @@ function telaEditor(app, id) {
       <tr class="d-valor">
         <td><input data-l="local" value="${esc(L.local)}"></td>
         <td colspan="2"><input data-l="areaSetor" value="${esc(L.areaSetor)}"></td>
-        <td class="d-cent"><input type="date" data-l="emissao" value="${esc(L.emissao)}" style="text-align:center"></td>
+        <td class="d-cent d-valor">${EMISSAO_MODELO}</td>
         <td class="d-cent"><input data-l="revisao" value="${esc(L.revisao)}" style="text-align:center"></td>
         <td class="d-cent"><input data-l="numero" value="${esc(L.numero)}" style="text-align:center"></td><td class="d-remover no-print"></td>
       </tr>
@@ -664,13 +724,14 @@ function ligarModais() {
     });
   });
   $("#btn-importar-banco").onclick = () => abrir($("#modal-banco"));
+  $("#btn-baixar-banco").onclick = baixarBancoJson;
   $("#btn-backup").onclick = () => abrir($("#modal-backup"));
 
   $("#arquivo-banco").onchange = async (e) => {
     const f = e.target.files[0];
     if (!f) return;
     try {
-      await importarArquivoBanco(f, $("#chk-apenas-ativos").checked);
+      await importarArquivoBanco(f);
     } catch (err) {
       $("#progresso-banco").hidden = false;
       $("#progresso-banco").textContent = "Erro: " + err.message;
