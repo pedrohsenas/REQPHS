@@ -26,7 +26,7 @@ body{
   background:var(--branco); border-bottom:3px solid var(--vermelho);
   padding:8px 18px; position:sticky; top:0; z-index:50; box-shadow:var(--sombra);
 }
-.marca{font-size:16px}
+.marca{font-size:16px; display:flex; align-items:center; gap:8px}
 .coracao{color:var(--vermelho)}
 #topo nav{display:flex; gap:8px; align-items:center}
 .nav-link{color:var(--tinta); text-decoration:none; padding:6px 10px; border-radius:6px}
@@ -192,6 +192,7 @@ tr.f-total .rot{text-align:right; background:#d9d9d9}
 
 /* ---------- modais ---------- */
 .modal{position:fixed; inset:0; background:rgba(15,17,20,.55); display:flex; align-items:center; justify-content:center; z-index:100; padding:16px}
+.modal[hidden]{display:none !important}   /* correção: display:flex sobrepunha o atributo hidden */
 .modal-caixa{background:#fff; border-radius:10px; max-width:520px; width:100%; padding:22px; box-shadow:0 10px 40px rgba(0,0,0,.3)}
 .modal-caixa h2{margin-top:0}
 .modal-acoes{display:flex; gap:10px; margin-top:16px; flex-wrap:wrap}
@@ -202,6 +203,28 @@ tr.f-total .rot{text-align:right; background:#d9d9d9}
   text-align:center; color:var(--cinza); padding:50px 20px; background:#fff;
   border:1px dashed var(--linha); border-radius:10px;
 }
+
+/* ---------- logo ---------- */
+.logo-img{height:34px; display:block}
+#topo .logo-img{height:30px}
+.f-logo img{max-height:14mm; max-width:30mm; object-fit:contain}
+
+/* ---------- tela de senha ---------- */
+#tela-login{
+  position:fixed; inset:0; z-index:200; background:var(--fundo);
+  display:flex; align-items:center; justify-content:center;
+}
+#tela-login[hidden]{display:none !important}
+.login-caixa{
+  background:#fff; border-radius:12px; box-shadow:var(--sombra);
+  border-top:4px solid var(--vermelho);
+  padding:38px 34px; width:min(360px, 92vw); text-align:center;
+  display:flex; flex-direction:column; gap:16px; align-items:center;
+}
+.login-caixa .logo-img{height:48px}
+.login-caixa input{width:100%; text-align:center; font-size:16px; letter-spacing:2px}
+.login-caixa .btn{width:100%; padding:10px}
+.login-erro{color:var(--vermelho); font-size:12px; min-height:16px; margin:0}
 
 /* ============================================================
    IMPRESSÃO — só a folha A4, campos viram texto puro

@@ -10,8 +10,22 @@
 </head>
 <body>
 
+<!-- ===== Tela de senha (aparece antes de tudo) ===== -->
+<div id="tela-login" class="no-print" hidden>
+  <form class="login-caixa" id="form-login">
+    <img class="logo-img" src="logo.png" alt="Lar" onerror="this.style.display='none'">
+    <strong style="font-size:17px">Requisições UIS3</strong>
+    <input type="password" id="senha" placeholder="Senha" autocomplete="current-password" autofocus>
+    <p class="login-erro" id="login-erro"></p>
+    <button class="btn" type="submit">Entrar</button>
+  </form>
+</div>
+
 <header id="topo" class="no-print">
-  <div class="marca"><span class="coracao">❤</span> <strong>Requisições UIS3</strong></div>
+  <div class="marca">
+    <img class="logo-img" src="logo.png" alt="" onerror="this.remove()">
+    <strong>Requisições UIS3</strong>
+  </div>
   <nav>
     <a href="#/" class="nav-link">Início</a>
     <button id="btn-importar-banco" class="btn sec" title="Importar/atualizar o banco de itens (.xlsx da empresa)">Banco de itens</button>

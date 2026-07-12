@@ -15,9 +15,15 @@ Site estático (sem servidor) para criar listas de materiais a partir do banco d
 ## Publicar no GitHub Pages
 
 1. Crie um repositório no GitHub (pode ser **público**, desde que você NÃO suba o banco da empresa — veja abaixo).
-2. Envie os arquivos desta pasta (`index.html`, `style.css`, `app.js`, `dados/`, `conversor/`).
+2. Envie os arquivos desta pasta (`index.html`, `style.css`, `app.js`, `dados/`, `conversor/`) **e um arquivo `logo.png`** com o logotipo (aparece no topo, na tela de senha e no cabeçalho do PDF; sem ele, o site usa um texto no lugar).
 3. No repositório: **Settings → Pages → Source: Deploy from a branch → Branch: main / (root) → Save**.
 4. Em ~1 minuto o site estará em `https://SEU-USUARIO.github.io/NOME-DO-REPO/`.
+
+## Senha de acesso
+
+O site pede uma senha única (sem usuário) na primeira visita e memoriza o acesso no navegador. Para trocar a senha: gere o SHA-256 da nova senha (por exemplo em `https://emn178.github.io/online-tools/sha256.html` ou com `echo -n "NovaSenha" | sha256sum` no Linux) e substitua o valor de `SENHA_HASH` no início da seção de acesso em `app.js`.
+
+> A senha é uma cortina de privacidade, não segurança forte: num site estático o conteúdo é público para quem tiver o link. Por isso o banco da empresa deve continuar sendo importado localmente, nunca publicado no repositório público.
 
 ## Carregar o banco de itens (escolha UMA das opções)
 

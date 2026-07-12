@@ -534,7 +534,7 @@ function telaEditor(app, id) {
 
     $("#folha").innerHTML = `
       <div class="f-topo">
-        <div class="f-logo">Lar<small>Cooperativa Agroindustrial</small></div>
+        <div class="f-logo"><img src="logo.png" alt="Lar" onerror="this.outerHTML='Lar<small>Cooperativa Agroindustrial</small>'"></div>
         <div class="f-titulo">REQUISIÇÃO DE MATERIAL</div>
         <div class="f-num"><input data-l="numeroFO" value="${esc(L.numeroFO)}" style="text-align:center;font-weight:700"></div>
         <div class="f-controle">Número<br>FO 012 232-12<br>Emissão: 19/06/15<br>Revisão: 31/10/19 · Nº 3</div>
@@ -635,7 +635,9 @@ function ligarModais() {
   const abrir = (m) => { m.hidden = false; };
   const fechar = (m) => { m.hidden = true; };
   $$(".modal").forEach(m => {
-    m.addEventListener("click", (e) => { if (e.target === m || e.target.dataset.fechar !== undefined && e.target.hasAttribute("data-fechar")) fechar(m); });
+    m.addEventListener("click", (e) => {
+      if (e.target === m || e.target.closest("[data-fechar]")) fechar(m);
+    });
   });
   $("#btn-importar-banco").onclick = () => abrir($("#modal-banco"));
   $("#btn-backup").onclick = () => abrir($("#modal-backup"));
@@ -673,7 +675,37 @@ function ligarModais() {
   };
 }
 
+/* ============================================================
+   Acesso por senha (fixa, sem usuário)
+   Guardamos apenas o SHA-256 da senha — o texto não fica no código.
+   Atenção: em site estático isso é uma cortina de privacidade,
+   não segurança forte (o conteúdo do site é público para quem tiver o link).
+   ============================================================ */
+const SENHA_HASH = "1a7086d1c6998de11d1ffd745096a0bfa726f0c4d11f7d3264e681d0aaf66413";
+async function sha256(txt) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(txt));
+  return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+function ligarLogin() {
+  const tela = $("#tela-login");
+  if (localStorage.getItem("rq.acesso") === SENHA_HASH) { tela.hidden = true; return; }
+  tela.hidden = false;
+  $("#senha").focus();
+  $("#form-login").onsubmit = async (e) => {
+    e.preventDefault();
+    const h = await sha256($("#senha").value);
+    if (h === SENHA_HASH) {
+      localStorage.setItem("rq.acesso", h);   // não pede de novo neste navegador
+      tela.hidden = true;
+    } else {
+      $("#login-erro").textContent = "Senha incorreta.";
+      $("#senha").select();
+    }
+  };
+}
+
 /* ---------------- inicialização ---------------- */
+ligarLogin();
 ligarModais();
 render();
 carregarBanco();
