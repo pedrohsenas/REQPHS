@@ -6,7 +6,7 @@
 "use strict";
 
 /* ---------------- pessoas (aba "Dados" do modelo) ---------------- */
-const PESSOAS = [
+const PESSOAS_PADRAO = [
   { nome: "Pedro Henrique Sena de Souza",   cargo: "Engenheiro Eletricista - UIS3" },
   { nome: "Alexssandro Aparecido Benitez",  cargo: "Supervisor de Manutenção - UIS3" },
   { nome: "Jaisson Aranha Machado",         cargo: "Gerente Industrial - UIS3" },
@@ -17,7 +17,11 @@ const PESSOAS = [
   { nome: "Marcia Pereira Paz",             cargo: "PCM - UIS3" },
   { nome: "Luiz Ricardo de Oliveira Silva", cargo: "Coordenador de Manutenção" },
   { nome: "Eberson Mariano da Roza",        cargo: "Supervisor de Produção - UIS3" },
-];
+].map((p, i) => ({ id: "padrao-" + (i + 1), email: "", ...p }));
+
+/* cadastros editáveis (tela "Cadastros"): assinantes e setores */
+let pessoas = null;   // carregado após LS existir (abaixo)
+let setores = null;
 const P = {
   pedro:     "Pedro Henrique Sena de Souza",
   alex:      "Alexssandro Aparecido Benitez",
@@ -31,7 +35,27 @@ function assinaturasPorValor(total) {
   if (total <= 20000) return [P.pedro, P.alex, P.jaisson];
   return [P.alex, P.jaisson, P.ademilson];
 }
-const cargoDe = (nome) => (PESSOAS.find(p => p.nome === nome) || {}).cargo || "";
+const cargoDe = (nome) => ((pessoas || PESSOAS_PADRAO).find(p => p.nome === nome) || {}).cargo || "";
+const acharPorCargo = (trecho) => {
+  const t = trecho.toUpperCase();
+  const p = (pessoas || PESSOAS_PADRAO).find(x => String(x.cargo || "").toUpperCase().includes(t));
+  return p ? p.nome : "";
+};
+/* assinantes fixos do Cadastro de Mín/Máx: solicitante + supervisor + gerente industrial */
+function assinaturasMM(l) {
+  return [
+    l.solicitante || "",
+    acharPorCargo("SUPERVISOR DE MANUTENÇÃO") || P.alex,
+    acharPorCargo("GERENTE INDUSTRIAL - UIS3") || P.jaisson,
+  ].filter(Boolean);
+}
+
+/* usuário logado (nuvem): vincula pelo e-mail do cadastro de assinantes */
+let emailSessao = "";
+let usuarioAtual = null;
+function deduzirUsuario() {
+  usuarioAtual = (pessoas || []).find(p => p.email && norm(p.email) === norm(emailSessao)) || null;
+}
 
 /* ---------------- utilidades ---------------- */
 const $  = (sel, el = document) => el.querySelector(sel);
@@ -62,9 +86,12 @@ const LS = {
   gravar(chave, v) { localStorage.setItem(chave, JSON.stringify(v)); },
 };
 let projetos = LS.ler("rq.projetos", []);   // [{id, nome}]
+pessoas = LS.ler("rq.pessoas", PESSOAS_PADRAO);          // [{id, nome, cargo, email}]
+setores = LS.ler("rq.setores", [{ id: "s1", nome: "9313" }]);  // [{id, nome}]
 let listas   = LS.ler("rq.listas", []);     // ver novaLista()
 let precos   = LS.ler("rq.precos", {});     // { chaveItem: {preco, em} }
 const salvarTudo = () => { LS.gravar("rq.projetos", projetos); LS.gravar("rq.listas", listas); LS.gravar("rq.precos", precos); };
+const salvarCadastros = () => { LS.gravar("rq.pessoas", pessoas); LS.gravar("rq.setores", setores); };
 
 /* ============================================================
    NUVEM (Supabase) — banco on-line e multiusuário
@@ -91,6 +118,11 @@ async function nuvemExcluirProjeto(id) {
   if (!sb) return;
   await sb.from("req_projetos").delete().eq("id", id);
 }
+async function nuvemSalvarPessoa(p) { if (sb) await sb.from("req_pessoas").upsert(p); }
+async function nuvemExcluirPessoa(id) { if (sb) await sb.from("req_pessoas").delete().eq("id", id); }
+async function nuvemSalvarSetor(s) { if (sb) await sb.from("req_setores").upsert(s); }
+async function nuvemExcluirSetor(id) { if (sb) await sb.from("req_setores").delete().eq("id", id); }
+
 async function nuvemSalvarPreco(chave, reg) {
   if (!sb) return;
   await sb.from("req_precos").upsert({ chave, preco: reg.preco, em: reg.em });
@@ -109,7 +141,17 @@ async function carregarNuvem() {
     projetos = (p.data || []).map(r => ({ id: r.id, nome: r.nome }));
     listas = (l.data || []).map(r => r.dados);
     precos = Object.fromEntries((pr.data || []).map(r => [r.chave, { preco: +r.preco, em: r.em }]));
-    salvarTudo();          // cache local para abrir rápido na próxima vez
+    /* cadastros (tabelas podem não existir ainda; tolerante a erro) */
+    try {
+      const pe = await sb.from("req_pessoas").select("*");
+      if (!pe.error && pe.data && pe.data.length) pessoas = pe.data;
+    } catch { /* mantém local */ }
+    try {
+      const se = await sb.from("req_setores").select("*");
+      if (!se.error && se.data && se.data.length) setores = se.data;
+    } catch { /* mantém local */ }
+    deduzirUsuario();
+    salvarTudo(); salvarCadastros();   // cache local para abrir rápido na próxima vez
     render();
   } catch (e) {
     console.warn("nuvem: usando cache local (", e.message, ")");
@@ -399,14 +441,18 @@ function buscar(consulta, ignorarEspacos, limite = 60) {
 }
 
 /* ---------------- modelos de dados ---------------- */
-function novaLista(titulo, projetoId) {
+function novaLista(titulo, projetoId, tipo) {
   return {
-    id: uid(), titulo: titulo || "Nova requisição", projetoId: projetoId || "",
+    id: uid(), tipo: tipo || "RM",                    // RM = requisição de material · MM = cadastro mín/máx
+    status: "andamento",                              // andamento | concluida
+    autor: (usuarioAtual && usuarioAtual.nome) || emailSessao || "",
+    anotacoes: "",
+    titulo: titulo || "Nova requisição", projetoId: projetoId || "",
     numeroFO: "FO 185 1613-0015",
     local: "185 - UIS 3", areaSetor: "PROJETOS",
     emissao: hoje(), revisao: "0", numero: "",
     descricao: "", data: hoje(),
-    solicitante: P.pedro, setor: "9313", projetoNum: "", nrOS: "",
+    solicitante: (usuarioAtual && usuarioAtual.nome) || P.pedro, setor: "9313", projetoNum: "", nrOS: "",
     observacao: "COMUNICAR O SOLICITANTE QUANDO DA CHEGADA.",
     itens: [],                       // {codigo, descricao, un, qtd, preco}
     assinaturas: assinaturasPorValor(0),
@@ -414,7 +460,9 @@ function novaLista(titulo, projetoId) {
     criadoEm: hoje(),
   };
 }
-const totalDa = (l) => l.itens.reduce((s, i) => s + (i.qtd || 0) * (i.preco || 0), 0);
+const totalDa = (l) => l.tipo === "MM"
+  ? l.itens.reduce((s, i) => s + (i.qtdMax || 0) * (i.preco || 0), 0)     // MM: estimado pelo máximo
+  : l.itens.reduce((s, i) => s + (i.qtd || 0) * (i.preco || 0), 0);
 
 /* ---------------- roteamento ---------------- */
 window.addEventListener("hashchange", render);
@@ -423,7 +471,7 @@ function render() {
   const app = $("#app");
   if (h.startsWith("#/lista/"))       telaEditor(app, h.slice(8));
   else if (h.startsWith("#/projeto/")) telaProjeto(app, h.slice(10));
-  else if (h === "#/minmax")           telaMinMax(app);
+  else if (h === "#/cadastros")        telaCadastros(app);
   else telaInicio(app);
 }
 
@@ -433,9 +481,9 @@ function render() {
 function telaInicio(app) {
   const cartaoLista = (l) => {
     const proj = projetos.find(p => p.id === l.projetoId);
-    return `<div class="cartao">
-      <h3><a href="#/lista/${l.id}">${esc(l.titulo)}</a></h3>
-      <div class="sub">${l.itens.length} itens · criada em ${dataBR(l.criadoEm)}${proj ? ` · <span class="etiqueta">${esc(proj.nome)}</span>` : ""}</div>
+    return `<div class="cartao ${l.status === "concluida" ? "concluida" : ""}">
+      <h3><span class="etiqueta tipo">${l.tipo === "MM" ? "MM" : "RM"}</span> <a href="#/lista/${l.id}">${esc(l.titulo)}</a></h3>
+      <div class="sub">${l.itens.length} itens · ${dataBR(l.criadoEm)}${l.autor ? ` · por ${esc(l.autor)}` : ""}${proj ? ` · <span class="etiqueta">${esc(proj.nome)}</span>` : ""}${l.status === "concluida" ? ' · <span class="etiqueta ok">✔ concluída</span>' : ""}</div>
       <div class="rodape">
         <span class="valor">${dinheiro(totalDa(l))}</span>
         <span class="espacador"></span>
@@ -460,9 +508,9 @@ function telaInicio(app) {
   app.innerHTML = `
     <div class="pagina-titulo">
       <h1>Listas de materiais</h1><span class="espacador"></span>
-      <button class="btn" id="btn-nova-lista">+ Nova lista</button>
+      <button class="btn" id="btn-nova-lista">+ Requisição (RM)</button>
+      <button class="btn sec" id="btn-nova-mm">+ Cadastro Mín/Máx (MM)</button>
       <button class="btn sec" id="btn-novo-projeto">+ Novo projeto</button>
-      <a class="btn sec" href="#/minmax" title="Em preparação">Cadastro Mín/Máx</a>
     </div>
     ${projetos.length ? `<div class="secao-titulo">Projetos</div><div class="grade-cartoes">${projetos.map(cartaoProjeto).join("")}</div>` : ""}
     <div class="secao-titulo">Requisições</div>
@@ -487,6 +535,14 @@ function telaInicio(app) {
   };
   $("#btn-nova-lista").onclick = criarLista;
   const b2 = $("#btn-nova-lista-2"); if (b2) b2.onclick = criarLista;
+  $("#btn-nova-mm").onclick = () => {
+    const t = prompt("Título do cadastro de Mínimo e Máximo:", "");
+    if (t === null) return;
+    const l = novaLista(t.trim() || "Novo cadastro MM", "", "MM");
+    l.assinaturas = assinaturasMM(l);
+    listas.push(l); salvarTudo(); nuvemSalvarLista(l);
+    location.hash = "#/lista/" + l.id;
+  };
   $("#btn-novo-projeto").onclick = () => {
     const nome = prompt("Nome do projeto:");
     if (!nome) return;
@@ -573,24 +629,83 @@ function telaProjeto(app, id) {
 }
 
 /* ============================================================
-   TELA: CADASTRO DE MÍNIMO E MÁXIMO (estrutura pronta p/ implementação)
-   Quando formos implementar: mesma mecânica do editor de requisição
-   (busca no banco + formulário padrão + prévia para PDF).
+   TELA: CADASTROS — assinantes (nomes/funções/e-mails) e setores
    ============================================================ */
-function telaMinMax(app) {
+function telaCadastros(app) {
+  const linhaPessoa = (p) => `<tr>
+    <td>${esc(p.nome)}</td><td>${esc(p.cargo)}</td><td>${esc(p.email || "—")}</td>
+    <td style="white-space:nowrap">
+      <button class="btn mini sec" data-editar-pessoa="${p.id}">Editar</button>
+      <button class="btn mini perigo" data-excluir-pessoa="${p.id}">Excluir</button>
+    </td></tr>`;
+  const linhaSetor = (s) => `<tr>
+    <td>${esc(s.nome)}</td>
+    <td style="white-space:nowrap">
+      <button class="btn mini sec" data-editar-setor="${s.id}">Editar</button>
+      <button class="btn mini perigo" data-excluir-setor="${s.id}">Excluir</button>
+    </td></tr>`;
+
   app.innerHTML = `
     <div class="pagina-titulo">
-      <h1>Requisição de cadastro de Mínimo e Máximo</h1>
-      <span class="espacador"></span>
+      <h1>Cadastros</h1><span class="espacador"></span>
       <a class="btn sec" href="#/">← Voltar</a>
     </div>
-    <div class="vazio">
-      <p style="font-size:15px"><strong>Tela reservada — implementação em breve.</strong></p>
-      <p>O fluxo será igual ao das requisições de material: buscar o item no banco,<br>
-      preencher o formulário padrão de mín/máx e gerar o PDF no layout oficial.</p>
-      <p style="color:#999;font-size:12px">Para implementarmos, será necessário o modelo do formulário padrão<br>
-      (planilha ou PDF preenchido), como foi feito com a Requisição de Material.</p>
-    </div>`;
+    <div class="secao-titulo">Assinantes (nomes e funções)</div>
+    <p style="font-size:12px;color:var(--cinza);margin:0 0 8px">
+      O <strong>e-mail</strong> vincula a pessoa ao login: quem entrar com ele vira automaticamente o solicitante das novas listas.
+      Atenção: a alçada de valores usa os nomes de Pedro, Alex, Jaisson e Ademilson — se renomear essas pessoas, avise para ajustarmos a regra.</p>
+    <table class="app"><thead><tr><th>Nome</th><th>Função</th><th>E-mail (login)</th><th></th></tr></thead>
+      <tbody>${pessoas.map(linhaPessoa).join("")}</tbody></table>
+    <button class="btn" id="btn-add-pessoa" style="margin-top:10px">+ Adicionar assinante</button>
+
+    <div class="secao-titulo">Setores (usados no Cadastro de Mín/Máx)</div>
+    <table class="app" style="max-width:480px"><thead><tr><th>Setor</th><th></th></tr></thead>
+      <tbody>${setores.map(linhaSetor).join("")}</tbody></table>
+    <button class="btn" id="btn-add-setor" style="margin-top:10px">+ Adicionar setor</button>`;
+
+  const pedirPessoa = (p = {}) => {
+    const nome = prompt("Nome completo:", p.nome || ""); if (nome === null || !nome.trim()) return null;
+    const cargo = prompt("Função/cargo (ex.: Supervisor de Manutenção - UIS3):", p.cargo || ""); if (cargo === null) return null;
+    const email = prompt("E-mail de login (opcional, vincula ao Supabase):", p.email || ""); if (email === null) return null;
+    return { nome: nome.trim(), cargo: cargo.trim(), email: email.trim().toLowerCase() };
+  };
+  $("#btn-add-pessoa").onclick = () => {
+    const d = pedirPessoa(); if (!d) return;
+    const p = { id: uid(), ...d };
+    pessoas.push(p); salvarCadastros(); nuvemSalvarPessoa(p); deduzirUsuario(); render();
+  };
+  $("#btn-add-setor").onclick = () => {
+    const nome = prompt("Nome/código do setor:"); if (!nome || !nome.trim()) return;
+    const s = { id: uid(), nome: nome.trim() };
+    setores.push(s); salvarCadastros(); nuvemSalvarSetor(s); render();
+  };
+  app.onclick = (e) => {
+    const d = e.target.dataset || {};
+    if (d.editarPessoa) {
+      const p = pessoas.find(x => x.id === d.editarPessoa);
+      const novo = pedirPessoa(p); if (!novo) return;
+      Object.assign(p, novo); salvarCadastros(); nuvemSalvarPessoa(p); deduzirUsuario(); render();
+    }
+    if (d.excluirPessoa) {
+      const p = pessoas.find(x => x.id === d.excluirPessoa);
+      if (confirm(`Excluir “${p.nome}” do cadastro de assinantes?`)) {
+        pessoas = pessoas.filter(x => x.id !== d.excluirPessoa);
+        salvarCadastros(); nuvemExcluirPessoa(d.excluirPessoa); render();
+      }
+    }
+    if (d.editarSetor) {
+      const s = setores.find(x => x.id === d.editarSetor);
+      const nome = prompt("Nome/código do setor:", s.nome); if (!nome || !nome.trim()) return;
+      s.nome = nome.trim(); salvarCadastros(); nuvemSalvarSetor(s); render();
+    }
+    if (d.excluirSetor) {
+      const s = setores.find(x => x.id === d.excluirSetor);
+      if (confirm(`Excluir o setor “${s.nome}”?`)) {
+        setores = setores.filter(x => x.id !== d.excluirSetor);
+        salvarCadastros(); nuvemExcluirSetor(d.excluirSetor); render();
+      }
+    }
+  };
 }
 
 /* ============================================================
@@ -599,28 +714,50 @@ function telaMinMax(app) {
 function telaEditor(app, id) {
   const L = listas.find(x => x.id === id);
   if (!L) { location.hash = "#/"; return; }
+  if (!L.tipo) L.tipo = "RM";
+  if (!L.status) L.status = "andamento";
+  const ehMM = L.tipo === "MM";
+  const prefixoPdf = ehMM ? "MM_UIS3_" : "RM_UIS3_";
+  const nomePdf = () => prefixoPdf + (L.titulo || "documento").replace(/[\\/:*?"<>|]/g, "-");
+
+  /* salvar: local na hora; nuvem 0,8s após parar de digitar; botão mostra o estado */
   let tNuvem = null;
+  const marcarSalvo = (ok) => {
+    const b = $("#btn-salvar"); if (!b) return;
+    b.textContent = ok ? "✓ Salvo" : "💾 Salvar";
+    b.classList.toggle("salvo", ok);
+  };
   const salvar = () => {
-    salvarTudo();
+    salvarTudo(); marcarSalvo(false);
     clearTimeout(tNuvem);
-    tNuvem = setTimeout(() => nuvemSalvarLista(L), 800);   // envia após parar de digitar
+    tNuvem = setTimeout(async () => { await nuvemSalvarLista(L); marcarSalvo(true); }, 800);
   };
 
   app.innerHTML = `
-  <div class="pagina-titulo no-print">
-    <h1>✏️ <input type="text" id="ed-titulo" value="${esc(L.titulo)}" style="font-size:17px;font-weight:700;min-width:280px"></h1>
-    <select id="ed-projeto" title="Projeto">
-      <option value="">— sem projeto —</option>
-      ${projetos.map(p => `<option value="${p.id}" ${p.id === L.projetoId ? "selected" : ""}>${esc(p.nome)}</option>`).join("")}
-    </select>
-    <span class="espacador"></span>
-    <a class="btn sec" href="#/">← Voltar</a>
-    <button class="btn sec" id="btn-imprimir">🖨️ Imprimir</button>
-    <button class="btn" id="btn-pdf">📤 Baixar / Compartilhar PDF</button>
+  <div class="barra-editor no-print">
+    <div class="be-linha">
+      <span class="be-tipo">${ehMM ? "MM" : "RM"}</span>
+      <input type="text" id="ed-titulo" class="be-titulo" value="${esc(L.titulo)}" placeholder="Título">
+      <select id="ed-projeto" title="Projeto">
+        <option value="">— sem projeto —</option>
+        ${projetos.map(p => `<option value="${p.id}" ${p.id === L.projetoId ? "selected" : ""}>${esc(p.nome)}</option>`).join("")}
+      </select>
+    </div>
+    <div class="be-linha">
+      <button class="btn sec" id="btn-status">${L.status === "concluida" ? "✅ Concluída" : "🕓 Em andamento"}</button>
+      <button class="btn sec" id="btn-salvar">✓ Salvo</button>
+      <span class="espacador"></span>
+      <a class="btn sec" href="#/">← Voltar</a>
+      <button class="btn sec" id="btn-imprimir">🖨️ Imprimir</button>
+      <button class="btn" id="btn-pdf">📤 PDF</button>
+    </div>
+    <details class="be-notas">
+      <summary>📝 Anotações internas${L.autor ? " · autor: " + esc(L.autor) : ""} (não saem no PDF)</summary>
+      <textarea id="ed-anotacoes" placeholder="Anotações gerais desta lista…">${esc(L.anotacoes || "")}</textarea>
+    </details>
   </div>
 
   <div class="editor">
-    <!-- painel de busca -->
     <aside class="painel no-print">
       <h2>Adicionar material</h2>
       <div class="busca-linha">
@@ -634,24 +771,44 @@ function telaEditor(app, id) {
       <button class="btn sec mini" id="btn-avulso" style="margin-top:8px">+ Item avulso (S/ CÓD.)</button>
       <div class="dica">Vários termos = todos precisam aparecer, em qualquer ordem.
       Ex.: <em>cabo pp 4x2,5</em>. Acentos são ignorados automaticamente.
-      Preços em verde vêm do histórico das suas listas.</div>
+      Amarelo = já usado antes; preço em verde vem do histórico.</div>
     </aside>
 
-    <!-- folha A4 -->
     <div class="folha-envolve">
       <div class="folha-barra no-print">
-        <span>Prévia do PDF — os campos amarelos são editáveis e saem brancos na impressão.</span>
+        <span class="zoom-ctl">
+          <button class="btn mini sec" id="zoom-menos" title="Diminuir">−</button>
+          <span id="zoom-val">100%</span>
+          <button class="btn mini sec" id="zoom-mais" title="Aumentar">+</button>
+          <button class="btn mini sec" id="zoom-ajustar" title="Ajustar à largura da tela">Ajustar</button>
+        </span>
         <span class="total-vivo" id="total-vivo"></span>
       </div>
-      <div class="folha" id="folha"></div>
+      <div class="folha-rolagem"><div class="folha" id="folha"></div></div>
     </div>
   </div>`;
 
+  /* ---------- barra do editor ---------- */
   $("#ed-titulo").oninput = (e) => { L.titulo = e.target.value; salvar(); };
   $("#ed-projeto").onchange = (e) => { L.projetoId = e.target.value; salvar(); };
+  $("#ed-anotacoes").oninput = (e) => { L.anotacoes = e.target.value; salvar(); };
+  $("#btn-status").onclick = () => {
+    L.status = L.status === "concluida" ? "andamento" : "concluida";
+    $("#btn-status").textContent = L.status === "concluida" ? "✅ Concluída" : "🕓 Em andamento";
+    salvar();
+  };
+  $("#btn-salvar").onclick = async () => {
+    salvarTudo();
+    clearTimeout(tNuvem);
+    $("#btn-salvar").textContent = "Salvando…";
+    await nuvemSalvarLista(L);
+    marcarSalvo(true);
+  };
+  marcarSalvo(true);
+
   $("#btn-imprimir").onclick = () => {
     const tituloAntes = document.title;
-    document.title = L.titulo.replace(/[\\/:*?"<>|]/g, "-");   // vira o nome do PDF
+    document.title = nomePdf();               // vira o nome do PDF na impressão
     window.print();
     setTimeout(() => { document.title = tituloAntes; }, 500);
   };
@@ -659,10 +816,12 @@ function telaEditor(app, id) {
   /* gera um ARQUIVO .pdf (funciona no celular) e abre o compartilhar do sistema */
   $("#btn-pdf").onclick = async () => {
     const btn = $("#btn-pdf");
-    btn.disabled = true; btn.textContent = "Gerando PDF…";
+    btn.disabled = true; btn.textContent = "Gerando…";
     try {
-      const nome = (L.titulo || "requisicao").replace(/[\\/:*?"<>|]/g, "-") + ".pdf";
-      document.body.classList.add("modo-pdf");               // aparência de impressão
+      const nome = nomePdf() + ".pdf";
+      const zoomAntes = $(".folha").style.zoom;
+      $(".folha").style.zoom = "";                            // captura em tamanho real
+      document.body.classList.add("modo-pdf");
       await new Promise(r => setTimeout(r, 60));
       const blob = await html2pdf().set({
         margin: 5,
@@ -673,20 +832,41 @@ function telaEditor(app, id) {
         pagebreak: { mode: ["css", "legacy"] },
       }).from($(".folha")).outputPdf("blob");
       document.body.classList.remove("modo-pdf");
+      $(".folha").style.zoom = zoomAntes;
 
       const arquivo = new File([blob], nome, { type: "application/pdf" });
       if (navigator.canShare && navigator.canShare({ files: [arquivo] })) {
-        try { await navigator.share({ files: [arquivo], title: L.titulo }); }
+        try { await navigator.share({ files: [arquivo], title: nomePdf() }); }
         catch (e) { if (e.name !== "AbortError") baixarBlob(blob, nome); }
       } else {
-        baixarBlob(blob, nome);                               // desktop: só baixa
+        baixarBlob(blob, nome);
       }
     } catch (e) {
       document.body.classList.remove("modo-pdf");
       alert("Erro ao gerar o PDF: " + e.message);
     }
-    btn.disabled = false; btn.textContent = "📤 Baixar / Compartilhar PDF";
+    btn.disabled = false; btn.textContent = "📤 PDF";
   };
+
+  /* ---------- zoom da folha (celular e PC) ---------- */
+  let zoomManual = parseFloat(sessionStorage.getItem("rq.zoom") || "") || 0;   // 0 = ajustar à tela
+  function aplicarZoom() {
+    const f = $(".folha"); if (!f) return;
+    const larguraDisp = $(".folha-envolve").clientWidth - 4;
+    const fator = zoomManual || Math.min(1, larguraDisp / 1123);
+    f.style.zoom = fator;
+    $("#zoom-val").textContent = Math.round(fator * 100) + "%";
+  }
+  const mudarZoom = (delta) => {
+    const atual = parseFloat($(".folha").style.zoom || 1);
+    zoomManual = Math.min(2, Math.max(0.3, atual + delta));
+    sessionStorage.setItem("rq.zoom", zoomManual);
+    aplicarZoom();
+  };
+  $("#zoom-menos").onclick = () => mudarZoom(-0.1);
+  $("#zoom-mais").onclick = () => mudarZoom(+0.1);
+  $("#zoom-ajustar").onclick = () => { zoomManual = 0; sessionStorage.setItem("rq.zoom", ""); aplicarZoom(); };
+  window.addEventListener("resize", aplicarZoom);
 
   /* ---------- busca ---------- */
   let selecionado = -1, resultadosAtuais = [];
@@ -696,12 +876,10 @@ function telaEditor(app, id) {
     const alvo = $("#resultados");
     alvo.innerHTML = resultadosAtuais.map((r, i) => {
       const ph = precoLembrado({ codigo: r.c, descricao: r.d });
-      const usada = precos["C:" + r.c] ? "usada" : "";
-      const marcada = lupaMarcada === r.c ? "marcada" : "";
-      return `<div class="resultado ${usada} ${i === selecionado ? "ativo" : ""}" data-i="${i}">
+      return `<div class="resultado ${i === selecionado ? "ativo" : ""} ${r.usado ? "usado" : ""}" data-i="${i}">
         <span class="cod">${esc(r.c)}</span><span class="desc">${esc(r.d)}${r.a ? "" : ' <span class="badge-inativo">DESATIVADO</span>'}</span>
         <span class="un">${esc(r.u)}</span>${ph ? `<span class="preco-hist">${dinheiro(ph)}</span>` : ""}
-        <button class="lupa ${marcada}" data-lupa="${i}" title="Pesquisar este item no Google (nova guia)">+🔍</button>
+        <button class="lupa ${r.c === lupaAtiva ? "verde" : ""}" data-lupa="${i}" title="Pesquisar este item no Google (nova guia)">+🔍</button>
       </div>`;
     }).join("");
     $("#contagem").textContent = resultadosAtuais.length
@@ -711,8 +889,8 @@ function telaEditor(app, id) {
     $$(".lupa", alvo).forEach(el => el.onclick = (e) => {
       e.stopPropagation();                                   // não adiciona o item à lista
       const r = resultadosAtuais[+el.dataset.lupa];
-      lupaMarcada = r.c;                                     // só uma lupa verde por vez
-      sessionStorage.setItem("rq.lupa", lupaMarcada);
+      lupaAtiva = r.c;                                       // marca este item como "em análise"
+      sessionStorage.setItem("rq.lupa", lupaAtiva);
       desenharResultados();
       window.open("https://www.google.com/search?q=" + encodeURIComponent('"' + r.d + '"'), "_blank");
     });
@@ -735,9 +913,10 @@ function telaEditor(app, id) {
 
   function adicionarDoBanco(r) {
     if (!r) return;
-    const item = { codigo: r.c, descricao: r.d, un: r.u, qtd: 1, preco: 0 };
-    const ph = precoLembrado(item);
-    if (ph) item.preco = ph;                    // puxa o último preço usado
+    const base = { codigo: r.c, descricao: r.d, un: r.u, preco: 0 };
+    const ph = precoLembrado(base);
+    if (ph) base.preco = ph;                    // puxa o último preço usado
+    const item = ehMM ? { ...base, qtdMin: 0, qtdMax: 0, justificativa: "" } : { ...base, qtd: 1 };
     L.itens.push(item);
     salvar(); desenharFolha();
     caixa.select();
@@ -745,16 +924,60 @@ function telaEditor(app, id) {
   $("#btn-avulso").onclick = () => {
     const d = prompt("Descrição do item avulso:");
     if (!d) return;
-    const item = { codigo: "S/ CÓD.", descricao: d.trim().toUpperCase(), un: "pç", qtd: 1, preco: 0 };
-    const ph = precoLembrado(item);
-    if (ph) item.preco = ph;
+    const base = { codigo: "S/ CÓD.", descricao: d.trim().toUpperCase(), un: "pç", preco: 0 };
+    const ph = precoLembrado(base);
+    if (ph) base.preco = ph;
+    const item = ehMM ? { ...base, qtdMin: 0, qtdMax: 0, justificativa: "" } : { ...base, qtd: 1 };
     L.itens.push(item); salvar(); desenharFolha();
   };
 
+  /* ---------- navegação por setas entre os campos da folha ---------- */
+  const COLUNAS_NAV = ["qtd", "preco", "min", "max", "just"];
+  $("#folha").parentElement.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowUp" && e.key !== "ArrowDown" && e.key !== "Enter") return;
+    const t = e.target;
+    if (!t.matches("input, select")) return;
+    if (t.type === "date" || t.tagName === "SELECT") return;      // setas têm função própria nesses
+    const dir = e.key === "ArrowUp" ? -1 : 1;                     // Enter desce, como no Excel
+    const col = COLUNAS_NAV.find(k => t.dataset[k] !== undefined);
+    let alvo = null;
+    if (col) {                                                    // dentro da tabela: mesma coluna, linha ±1
+      alvo = $(`#folha [data-${col}="${+t.dataset[col] + dir}"]`);
+      if (!alvo && dir === 1 && e.key === "Enter") { caixa.focus(); e.preventDefault(); return; }
+    } else {                                                      // cabeçalho: campo seguinte/anterior
+      const campos = $$("#folha input, #folha textarea").filter(el => el.offsetParent);
+      const i = campos.indexOf(t);
+      if (i >= 0) alvo = campos[i + dir];
+    }
+    if (alvo) { alvo.focus(); if (alvo.select) alvo.select(); e.preventDefault(); }
+  });
+
   /* ---------- folha (prévia = PDF oficial, A4 paisagem) ---------- */
-  const LINHAS_MIN = 10;   // linhas em branco só na tela; a impressão as oculta, como no PDF oficial
+  const LINHAS_MIN = 10;   // linhas em branco só na tela; a impressão as oculta
   const fmtQtd = (n) => n ? new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 3 }).format(n) : "";
+
   function desenharFolha() {
+    /* guarda o campo focado para devolver o foco após redesenhar */
+    const at = document.activeElement;
+    const foco = (at && at.closest && at.closest("#folha") && at.dataset) ? { ...at.dataset } : null;
+
+    if (ehMM) folhaMM(); else folhaRM();
+    ligarEventosFolha();
+    aplicarZoom();
+
+    if (foco) {
+      for (const k of [...COLUNAS_NAV, "l"]) {
+        if (foco[k] !== undefined) {
+          const el = $(`#folha [data-${k}="${foco[k]}"]`);
+          if (el) { el.focus(); }
+          break;
+        }
+      }
+    }
+  }
+
+  /* ===== folha RM: REQUISIÇÃO DE MATERIAL ===== */
+  function folhaRM() {
     const total = totalDa(L);
     if (!L.assinaturasManuais) L.assinaturas = assinaturasPorValor(total);
     $("#total-vivo").textContent = "Total: " + dinheiro(total);
@@ -772,33 +995,30 @@ function telaEditor(app, id) {
     const vazias = Math.max(0, LINHAS_MIN - L.itens.length);
     const linhaVazia = `<tr class="d-item d-vazia"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td class="d-remover no-print"></td></tr>`;
 
-    /* assinaturas: colunas do PDF -> A | B | C+D | E+F(almoxarifado) */
     const ass = [L.assinaturas[0] || "", L.assinaturas[1] || "", L.assinaturas[2] || ""];
-    const rotAss = (i, nome) =>
-      (i === 0 && nome === P.pedro) ? "VISTO SOLICITANTE" : "VISTO AUTORIZAÇÃO";
+    const rotAss = (i, nome) => (i === 0 && nome === P.pedro) ? "VISTO SOLICITANTE" : "VISTO AUTORIZAÇÃO";
     const celAss = (nome, i, colspan) => `
       <td colspan="${colspan}">
         ${nome ? `<div class="d-ass-nome">${esc(nome)}</div><div class="d-ass-cargo">${esc(cargoDe(nome))}</div>` : "&nbsp;"}
         <div class="d-ass-troca no-print">
           <select data-ass="${i}">
             <option value="" ${!nome ? "selected" : ""}>(sem assinatura)</option>
-            ${PESSOAS.map(p => `<option ${p.nome === nome ? "selected" : ""}>${esc(p.nome)}</option>`).join("")}
+            ${pessoas.map(p => `<option ${p.nome === nome ? "selected" : ""}>${esc(p.nome)}</option>`).join("")}
           </select>
         </div>
       </td>`;
 
     $("#folha").innerHTML = `
-    <div class="folha-rolagem"><table class="doc">
+    <table class="doc">
       <colgroup>
         <col class="cA"><col class="cB"><col class="cC"><col class="cD"><col class="cE"><col class="cF"><col class="cX">
       </colgroup>
-
-      <!-- cabeçalho -->
       <tr>
-        <td class="d-logo" rowspan="1"><img src="favicon.svg" alt="Lar" onerror="this.outerHTML='<b style=\'font-size:22px;color:#d5203b\'>Lar</b>'"></td>
+        <td class="d-logo"><img src="favicon.svg" alt="Lar" onerror="this.outerHTML='<b style=\'font-size:22px;color:#d5203b\'>Lar</b>'"></td>
         <td class="d-titulo" colspan="2">REQUISIÇÃO DE MATERIAL</td>
         <td class="d-numero" colspan="2"><span class="rotulo">NÚMERO</span><input data-l="numeroFO" value="${esc(L.numeroFO)}"></td>
-        <td class="d-anexos"><img src="icone_pdf.png" alt="" onerror="this.remove()"><img src="icone_doc.png" alt="" onerror="this.remove()"></td><td class="d-remover no-print"></td>
+        <td class="d-anexos"><img src="icone_pdf.png" alt="" onerror="this.remove()"><img src="icone_doc.png" alt="" onerror="this.remove()"></td>
+        <td class="d-remover no-print"></td>
       </tr>
       <tr class="d-rot-min">
         <td>LOCAL</td><td colspan="2">ÁREA/SETOR</td>
@@ -808,15 +1028,14 @@ function telaEditor(app, id) {
         <td><input data-l="local" value="${esc(L.local)}"></td>
         <td colspan="2"><input data-l="areaSetor" value="${esc(L.areaSetor)}"></td>
         <td class="d-cent d-valor">${EMISSAO_MODELO}</td>
-        <td class="d-cent"><input data-l="revisao" value="${esc(L.revisao)}" style="text-align:center"></td>
-        <td class="d-cent"><input data-l="numero" value="${esc(L.numero)}" style="text-align:center"></td><td class="d-remover no-print"></td>
+        <td class="d-cent d-valor"></td>
+        <td class="d-cent d-valor">0</td>
+        <td class="d-remover no-print"></td>
       </tr>
-
       <tr><td class="d-descricao" colspan="6">
         <span class="rotulo">DESCRIÇÃO DO PRODUTO/ PROCESSO À SER COMPRADO:</span>
         <textarea data-l="descricao" placeholder="Descreva a finalidade da compra…">${esc(L.descricao)}</textarea>
       </td><td class="d-remover no-print"></td></tr>
-
       <tr class="d-rot-cent" style="font-weight:700">
         <td class="d-rot-cent">DATA</td><td class="d-rot-cent" colspan="2">SOLICITANTE</td>
         <td class="d-rot-cent">SETOR</td><td class="d-rot-cent">PROJETO</td><td class="d-rot-cent">NR O.S.</td><td class="d-remover no-print"></td>
@@ -828,8 +1047,6 @@ function telaEditor(app, id) {
         <td class="d-cent"><input data-l="projetoNum" value="${esc(L.projetoNum)}" style="text-align:center"></td>
         <td class="d-cent"><input data-l="nrOS" value="${esc(L.nrOS)}" style="text-align:center"></td><td class="d-remover no-print"></td>
       </tr>
-
-      <!-- itens -->
       <tr class="d-cab-itens">
         <td>Código</td><td>Descrição</td><td>Unidade</td><td>Qtd.</td>
         <td>Custo Médio (Unitário)</td><td>Valor</td><td class="d-remover no-print"></td>
@@ -842,12 +1059,9 @@ function telaEditor(app, id) {
         <td><span class="val"><span>R$</span><span>${fmtBR.format(total)}</span></span></td>
         <td class="d-remover no-print"></td>
       </tr>
-
       <tr><td class="d-obs" colspan="6">
         <span class="rotulo">OBSERVAÇÃO:</span> <input data-l="observacao" value="${esc(L.observacao)}" style="width:calc(100% - 90px);display:inline-block">
       </td><td class="d-remover no-print"></td></tr>
-
-      <!-- assinaturas: A | B | C+D | E+F -->
       <tr class="d-ass-rot">
         <td>${esc(rotAss(0, ass[0]))}</td>
         <td>VISTO AUTORIZAÇÃO</td>
@@ -860,21 +1074,121 @@ function telaEditor(app, id) {
         ${celAss(ass[2], 2, 2)}
         <td colspan="2">&nbsp;</td><td class="d-remover no-print"></td>
       </tr>
-    </table></div>
+    </table>
     <div class="no-print" style="margin-top:6px;font-size:11px;color:#777">
       Assinaturas sugeridas pela alçada de valor (até R$ 3.000 / até R$ 20.000 / acima).
       ${L.assinaturasManuais ? '<button class="btn mini sec" id="btn-auto-ass">Voltar ao automático</button>' : "Troque nos seletores para fixar manualmente."}
     </div>`;
+  }
 
-    /* eventos da folha */
+  /* ===== folha MM: CADASTRO DE MÍNIMO E MÁXIMO =====
+     Layout provisório na identidade oficial — será refinado com a planilha modelo. */
+  function folhaMM() {
+    L.assinaturas = assinaturasMM(L);
+    const total = totalDa(L);
+    $("#total-vivo").textContent = "Total (Qtd. Máx.): " + dinheiro(total);
+
+    const linhaItem = (i, idx) => `
+      <tr class="d-item ${idx % 2 ? "zebra" : ""}">
+        <td class="d-cent">${esc(i.codigo)}</td>
+        <td class="d-desc-item">${esc(i.descricao)}</td>
+        <td class="d-cent">${esc(i.un)}</td>
+        <td class="d-qtd"><input data-min="${idx}" value="${i.qtdMin ? fmtQtd(i.qtdMin) : ""}" inputmode="decimal" style="text-align:center"></td>
+        <td class="d-qtd"><input data-max="${idx}" value="${i.qtdMax ? fmtQtd(i.qtdMax) : ""}" inputmode="decimal" style="text-align:center"></td>
+        <td class="d-preco"><span>R$</span><input data-preco="${idx}" value="${i.preco ? fmtBR.format(i.preco) : ""}" inputmode="decimal" style="text-align:right"></td>
+        <td><input data-just="${idx}" value="${esc(i.justificativa || "")}" placeholder=""></td>
+        <td class="d-remover no-print"><button data-remover="${idx}" title="Remover">✕</button></td>
+      </tr>`;
+    const vazias = Math.max(0, LINHAS_MIN - L.itens.length);
+    const linhaVazia = `<tr class="d-item d-vazia"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td><td class="d-remover no-print"></td></tr>`;
+
+    const ass = L.assinaturas;
+    const celAssFixa = (nome) => `
+      <td colspan="2">
+        ${nome ? `<div class="d-ass-nome">${esc(nome)}</div><div class="d-ass-cargo">${esc(cargoDe(nome))}</div>` : "&nbsp;"}
+      </td>`;
+
+    $("#folha").innerHTML = `
+    <table class="doc">
+      <colgroup>
+        <col style="width:10%"><col style="width:27%"><col style="width:5%">
+        <col style="width:9%"><col style="width:9%"><col style="width:12%"><col style="width:28%"><col class="cX">
+      </colgroup>
+      <tr>
+        <td class="d-logo"><img src="favicon.svg" alt="Lar" onerror="this.outerHTML='<b style=\'font-size:22px;color:#d5203b\'>Lar</b>'"></td>
+        <td class="d-titulo" colspan="4">CADASTRO DE MÍNIMO E MÁXIMO</td>
+        <td class="d-numero" colspan="1"><span class="rotulo">NÚMERO</span><input data-l="numeroFO" value="${esc(L.numeroFO || "")}"></td>
+        <td class="d-anexos"><img src="icone_pdf.png" alt="" onerror="this.remove()"><img src="icone_doc.png" alt="" onerror="this.remove()"></td>
+        <td class="d-remover no-print"></td>
+      </tr>
+      <tr class="d-rot-cent" style="font-weight:700">
+        <td class="d-rot-cent" colspan="2">SETOR</td>
+        <td class="d-rot-cent" colspan="3">SOLICITANTE</td>
+        <td class="d-rot-cent" colspan="2">DATA</td>
+        <td class="d-remover no-print"></td>
+      </tr>
+      <tr>
+        <td class="d-cent" colspan="2">
+          <select data-l="setor" style="width:100%;background:#fffbe6;border:none;text-align:center">
+            <option value="">— selecione —</option>
+            ${setores.map(s => `<option ${s.nome === L.setor ? "selected" : ""}>${esc(s.nome)}</option>`).join("")}
+          </select>
+        </td>
+        <td class="d-cent" colspan="3"><input data-l="solicitante" value="${esc(L.solicitante)}" style="text-align:center"></td>
+        <td class="d-cent" colspan="2"><input type="date" data-l="data" value="${esc(L.data)}" style="text-align:center"></td>
+        <td class="d-remover no-print"></td>
+      </tr>
+      <tr class="d-cab-itens">
+        <td>Código</td><td>Descrição</td><td>Un</td>
+        <td>Qtd. Mín.</td><td>Qtd. Máx.</td><td>Valor Unitário</td><td>Justificativa</td>
+        <td class="d-remover no-print"></td>
+      </tr>
+      ${L.itens.map(linhaItem).join("")}
+      ${linhaVazia.repeat(vazias)}
+      <tr class="d-total">
+        <td colspan="5" style="border-right:none"></td>
+        <td class="rot" style="text-align:right">Total (Qtd. Máx.)</td>
+        <td><span class="val"><span>R$</span><span>${fmtBR.format(total)}</span></span></td>
+        <td class="d-remover no-print"></td>
+      </tr>
+      <tr><td class="d-obs" colspan="7">
+        <span class="rotulo">OBSERVAÇÃO:</span> <input data-l="observacao" value="${esc(L.observacao || "")}" style="width:calc(100% - 90px);display:inline-block">
+      </td><td class="d-remover no-print"></td></tr>
+      <tr class="d-ass-rot">
+        <td colspan="2">VISTO SOLICITANTE</td>
+        <td colspan="3">VISTO SUPERVISÃO</td>
+        <td colspan="2">VISTO GERÊNCIA INDUSTRIAL</td>
+        <td class="d-remover no-print"></td>
+      </tr>
+      <tr class="d-ass-area">
+        ${celAssFixa(ass[0])}
+        <td colspan="3">${ass[1] ? `<div class="d-ass-nome">${esc(ass[1])}</div><div class="d-ass-cargo">${esc(cargoDe(ass[1]))}</div>` : "&nbsp;"}</td>
+        ${celAssFixa(ass[2])}
+        <td class="d-remover no-print"></td>
+      </tr>
+    </table>
+    <div class="no-print" style="margin-top:6px;font-size:11px;color:#777">
+      Assinantes fixos do MM: solicitante + supervisor + gerente industrial (independe do valor).
+      Layout provisório — será ajustado com a planilha modelo oficial.
+    </div>`;
+  }
+
+  /* ===== eventos comuns da folha ===== */
+  function ligarEventosFolha() {
     $$("#folha [data-l]").forEach(el => {
       el.onchange = el.oninput = () => { L[el.dataset.l] = el.value; salvar(); };
     });
     $$("#folha [data-qtd]").forEach(el => {
-      el.onchange = () => {
-        L.itens[+el.dataset.qtd].qtd = lerPreco(el.value);
-        salvar(); desenharFolha();
-      };
+      el.onchange = () => { L.itens[+el.dataset.qtd].qtd = lerPreco(el.value); salvar(); desenharFolha(); };
+    });
+    $$("#folha [data-min]").forEach(el => {
+      el.onchange = () => { L.itens[+el.dataset.min].qtdMin = lerPreco(el.value); salvar(); desenharFolha(); };
+    });
+    $$("#folha [data-max]").forEach(el => {
+      el.onchange = () => { L.itens[+el.dataset.max].qtdMax = lerPreco(el.value); salvar(); desenharFolha(); };
+    });
+    $$("#folha [data-just]").forEach(el => {
+      el.onchange = () => { L.itens[+el.dataset.just].justificativa = el.value; salvar(); };
     });
     $$("#folha [data-preco]").forEach(el => {
       el.onchange = () => {
@@ -901,6 +1215,7 @@ function telaEditor(app, id) {
     const ba = $("#btn-auto-ass");
     if (ba) ba.onclick = () => { L.assinaturasManuais = false; salvar(); desenharFolha(); };
   }
+
   desenharFolha();
   caixa.focus();
 }
@@ -986,7 +1301,7 @@ async function ligarLogin(aoAutenticar) {
   if (sb) {
     $("#email").hidden = false;
     const { data: { session } } = await sb.auth.getSession();
-    if (session) { tela.hidden = true; $("#btn-sair").hidden = false; aoAutenticar(); return; }
+    if (session) { emailSessao = session.user.email || ""; deduzirUsuario(); tela.hidden = true; $("#btn-sair").hidden = false; aoAutenticar(); return; }
     tela.hidden = false; $("#email").focus();
     $("#form-login").onsubmit = async (e) => {
       e.preventDefault();
@@ -996,6 +1311,7 @@ async function ligarLogin(aoAutenticar) {
         password: $("#senha").value,
       });
       if (error) { $("#login-erro").textContent = "E-mail ou senha incorretos."; $("#senha").select(); return; }
+      emailSessao = $("#email").value.trim(); deduzirUsuario();
       tela.hidden = true; $("#btn-sair").hidden = false;
       aoAutenticar();
     };

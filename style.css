@@ -156,7 +156,7 @@ td.d-logo img{height:13mm; max-width:90%; object-fit:contain; display:block; mar
 td.d-titulo{font-size:17px; font-weight:700; text-align:center}
 td.d-numero{font-weight:700; vertical-align:top; font-size:10px}
 td.d-numero .rotulo{display:block}
-td.d-anexos{background:#fff; text-align:center; white-space:nowrap}
+td.d-anexos{background:#fff; text-align:left; white-space:nowrap; padding-left:4px}
 td.d-anexos img{height:8.5mm; margin:0 1.5mm; vertical-align:middle}
 
 .d-rot-min{font-size:8.5px; padding:0 3px; height:12px}
@@ -195,6 +195,26 @@ tr.d-ass-area td{height:26mm; vertical-align:bottom; text-align:center; padding-
 /* coluna do X de remover (fora do documento) */
 td.d-remover{border:none !important; background:none; text-align:center; padding:0}
 td.d-remover button{border:none; background:none; color:var(--vermelho); cursor:pointer; font-size:13px; line-height:1}
+
+/* ---------- barra do editor ---------- */
+.barra-editor{background:var(--branco); border:1px solid var(--linha); border-radius:8px;
+  box-shadow:var(--sombra); padding:10px 12px; margin-bottom:14px; display:flex; flex-direction:column; gap:8px}
+.be-linha{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+.be-tipo{background:var(--tinta); color:#fff; font-weight:800; font-size:12px; border-radius:6px; padding:6px 9px}
+.be-titulo{flex:1; min-width:200px; font-size:16px; font-weight:700}
+#ed-projeto{min-width:170px}
+#btn-salvar.salvo{color:var(--verde); border-color:var(--verde)}
+.be-notas summary{cursor:pointer; font-size:12px; color:var(--cinza); user-select:none}
+.be-notas textarea{width:100%; min-height:70px; margin-top:8px}
+
+/* zoom da folha */
+.zoom-ctl{display:flex; gap:6px; align-items:center}
+#zoom-val{font-size:12px; color:var(--cinza); min-width:42px; text-align:center}
+
+/* cartões: status e tipo */
+.cartao.concluida{background:rgba(29,122,63,.10); border-left-color:var(--verde)}
+.etiqueta.tipo{background:var(--tinta); color:#fff; border-color:var(--tinta); font-weight:700}
+.etiqueta.ok{background:rgba(29,122,63,.15); color:var(--verde); border-color:var(--verde)}
 
 /* ---------- resumo de projeto ---------- */
 .resumo-blocos{display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin-bottom:18px}
@@ -296,7 +316,18 @@ body.modo-pdf tr.d-item.zebra input{background:transparent}
   .btn{padding:11px 14px}
 
   /* a folha rola na horizontal com o dedo (documento é paisagem) */
-  .folha-rolagem{overflow-x:auto; -webkit-overflow-scrolling:touch; border-radius:6px}
+  .folha-rolagem{overflow-x:auto; -webkit-overflow-scrolling:touch; border-radius:6px;
+    margin:0 -10px; padding:0 10px}          /* aproveita a largura toda da tela */
   .folha{margin:0}
   .folha-barra{font-size:12px}
+
+  .barra-editor{padding:8px; margin:0 -2px 10px}
+  .be-titulo{width:100%; flex:1 1 100%}
+  .be-linha .btn{flex:1; text-align:center; padding:10px 6px}
+  .be-linha .espacador{display:none}
+  #ed-projeto{flex:1}
+  .painel{padding:10px}
+  #resultados{max-height:38vh}
+  .dica{display:none}                        /* ganha espaço no celular */
+  .folha-envolve{gap:8px}
 }
