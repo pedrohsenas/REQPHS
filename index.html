@@ -8,6 +8,11 @@
 <link rel="stylesheet" href="style.css">
 <!-- SheetJS: leitura do .xlsx do banco de dados direto no navegador -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- html2pdf: geração do arquivo PDF no celular/desktop -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<!-- Supabase: banco on-line e login multiusuário -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script>
 </head>
 <body>
 
@@ -16,6 +21,7 @@
   <form class="login-caixa" id="form-login">
     <img class="logo-img" src="favicon.svg" alt="Lar">
     <strong style="font-size:17px">Requisições UIS3</strong>
+    <input type="email" id="email" placeholder="E-mail" autocomplete="username" hidden>
     <input type="password" id="senha" placeholder="Senha" autocomplete="current-password" autofocus>
     <p class="login-erro" id="login-erro"></p>
     <button class="btn" type="submit">Entrar</button>
@@ -31,6 +37,7 @@
     <a href="#/" class="nav-link">Início</a>
     <button id="btn-importar-banco" class="btn sec" title="Importar/atualizar o banco de itens (.xlsx da empresa)">Banco de itens</button>
     <button id="btn-backup" class="btn sec" title="Exportar/importar backup das listas">Backup</button>
+    <button id="btn-sair" class="btn sec" hidden title="Sair da conta">Sair</button>
   </nav>
   <div id="status-banco" class="status-banco">banco: carregando…</div>
 </header>

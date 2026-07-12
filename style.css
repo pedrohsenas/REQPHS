@@ -101,6 +101,8 @@ table.app tr:last-child td{border-bottom:none}
   display:flex; gap:10px; align-items:baseline;
 }
 .resultado:hover, .resultado.ativo{background:#fdeef0}
+.resultado.usado{background:#fff7cf}                         /* amarelo claro: já usado em requisições */
+.resultado.usado:hover, .resultado.usado.ativo{background:#ffefad}
 .resultado .cod{font-weight:700; font-size:12px; color:var(--vermelho); min-width:64px}
 .resultado .desc{flex:1; font-size:13px}
 .resultado .un{font-size:11px; color:var(--cinza)}
@@ -111,6 +113,11 @@ table.app tr:last-child td{border-bottom:none}
   font-size:11px; padding:2px 6px; white-space:nowrap; align-self:center; flex-shrink:0;
 }
 .resultado .lupa:hover{background:var(--fundo); border-color:var(--vermelho)}
+.resultado .lupa.verde{background:#c8efd0; border-color:var(--verde); color:var(--verde); font-weight:700}
+.resultado .lupa.marcada{background:#d7f3dc; border-color:var(--verde); color:var(--verde); font-weight:700}
+/* itens já usados em requisições anteriores: topo da lista, fundo amarelo claro */
+.resultado.usada{background:#fff8d6}
+.resultado.usada:hover, .resultado.usada.ativo{background:#ffeeb8}
 .contagem{font-size:11px; color:var(--cinza); margin-top:6px}
 .dica{font-size:12px; color:var(--cinza); background:var(--fundo); border-radius:6px; padding:8px 10px; margin-top:10px}
 
@@ -232,6 +239,20 @@ td.d-remover button{border:none; background:none; color:var(--vermelho); cursor:
 .login-erro{color:var(--vermelho); font-size:12px; min-height:16px; margin:0}
 
 /* ============================================================
+   MODO PDF — aplicado ao <body> durante a captura do arquivo
+   (mesma aparência da impressão)
+   ============================================================ */
+body.modo-pdf .no-print,
+body.modo-pdf td.d-remover,
+body.modo-pdf .d-ass-troca{display:none !important}
+body.modo-pdf col.cX{width:0 !important}
+body.modo-pdf tr.d-vazia{display:none}
+body.modo-pdf .folha{box-shadow:none; margin:0; width:1123px; max-width:none; min-height:0; padding:0}
+body.modo-pdf .folha-rolagem{overflow:visible}
+body.modo-pdf .folha input, body.modo-pdf .folha textarea{background:transparent}
+body.modo-pdf tr.d-item.zebra input{background:transparent}
+
+/* ============================================================
    IMPRESSÃO — A4 paisagem, igual ao PDF oficial
    ============================================================ */
 @media print{
@@ -249,4 +270,33 @@ td.d-remover button{border:none; background:none; color:var(--vermelho); cursor:
   tr.d-vazia{display:none}                 /* o PDF oficial não tem linhas em branco */
   tr.d-item.zebra td{background:#d9d9d9 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact}
   tr.d-total td{background:#ffc000 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact}
+}
+
+/* ============================================================
+   MOBILE — celular e tablet
+   ============================================================ */
+@media (max-width:900px){
+  body{font-size:15px}
+  main#app{padding:10px}
+  #topo{flex-wrap:wrap; row-gap:6px; padding:8px 10px}
+  #topo nav{flex-wrap:wrap}
+  .status-banco{margin-left:0; width:100%; order:9; font-size:11px}
+  .pagina-titulo h1{width:100%}
+  .pagina-titulo h1 input{width:100%; min-width:0 !important}
+  .pagina-titulo .btn{flex:1; text-align:center}
+  .grade-cartoes{grid-template-columns:1fr}
+
+  /* editor empilhado: busca em cima, folha embaixo */
+  .editor{grid-template-columns:1fr; gap:12px}
+  .painel{position:static; max-height:none}
+  #resultados{max-height:42vh}
+  .resultado{padding:12px 6px}                 /* alvo de toque maior */
+  .resultado .lupa{padding:8px 10px; font-size:13px}
+  .busca-linha input{font-size:16px}           /* evita zoom automático do iOS */
+  .btn{padding:11px 14px}
+
+  /* a folha rola na horizontal com o dedo (documento é paisagem) */
+  .folha-rolagem{overflow-x:auto; -webkit-overflow-scrolling:touch; border-radius:6px}
+  .folha{margin:0}
+  .folha-barra{font-size:12px}
 }

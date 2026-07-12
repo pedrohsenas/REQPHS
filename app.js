@@ -66,11 +66,63 @@ let listas   = LS.ler("rq.listas", []);     // ver novaLista()
 let precos   = LS.ler("rq.precos", {});     // { chaveItem: {preco, em} }
 const salvarTudo = () => { LS.gravar("rq.projetos", projetos); LS.gravar("rq.listas", listas); LS.gravar("rq.precos", precos); };
 
+/* ============================================================
+   NUVEM (Supabase) — banco on-line e multiusuário
+   Se config.js estiver vazio, o app roda 100% local como antes.
+   ============================================================ */
+const CFG = window.CONFIG_NUVEM || {};
+const nuvemAtiva = () => !!(CFG.url && CFG.anonKey && window.supabase);
+const sb = nuvemAtiva() ? window.supabase.createClient(CFG.url, CFG.anonKey) : null;
+
+async function nuvemSalvarLista(l) {
+  if (!sb) return;
+  const { error } = await sb.from("req_listas").upsert({ id: l.id, dados: l, atualizado_em: new Date().toISOString() });
+  if (error) console.warn("nuvem/listas:", error.message);
+}
+async function nuvemExcluirLista(id) {
+  if (!sb) return;
+  await sb.from("req_listas").delete().eq("id", id);
+}
+async function nuvemSalvarProjeto(p) {
+  if (!sb) return;
+  await sb.from("req_projetos").upsert(p);
+}
+async function nuvemExcluirProjeto(id) {
+  if (!sb) return;
+  await sb.from("req_projetos").delete().eq("id", id);
+}
+async function nuvemSalvarPreco(chave, reg) {
+  if (!sb) return;
+  await sb.from("req_precos").upsert({ chave, preco: reg.preco, em: reg.em });
+}
+
+/* carrega listas/projetos/preços compartilhados e redesenha */
+async function carregarNuvem() {
+  if (!sb) return;
+  try {
+    const [p, l, pr] = await Promise.all([
+      sb.from("req_projetos").select("*"),
+      sb.from("req_listas").select("dados"),
+      sb.from("req_precos").select("*"),
+    ]);
+    if (p.error || l.error || pr.error) throw new Error((p.error || l.error || pr.error).message);
+    projetos = (p.data || []).map(r => ({ id: r.id, nome: r.nome }));
+    listas = (l.data || []).map(r => r.dados);
+    precos = Object.fromEntries((pr.data || []).map(r => [r.chave, { preco: +r.preco, em: r.em }]));
+    salvarTudo();          // cache local para abrir rápido na próxima vez
+    render();
+  } catch (e) {
+    console.warn("nuvem: usando cache local (", e.message, ")");
+  }
+}
+
 const chavePreco = (item) => item.codigo && item.codigo !== "S/ CÓD." ? "C:" + item.codigo : "D:" + norm(item.descricao);
 function lembrarPreco(item) {
   if (!item.preco) return;
-  precos[chavePreco(item)] = { preco: item.preco, em: hoje() };
+  const chave = chavePreco(item);
+  precos[chave] = { preco: item.preco, em: hoje() };
   LS.gravar("rq.precos", precos);
+  nuvemSalvarPreco(chave, precos[chave]);   // compartilha com a equipe
 }
 const precoLembrado = (item) => (precos[chavePreco(item)] || {}).preco;
 
@@ -120,8 +172,61 @@ function tempoDe(reg) {
 
 async function carregarBanco() {
   const st = $("#status-banco");
+  const mostrar = (reg, origem) => {
+    indexarBanco(reg.itens);
+    const ativos = BANCO.filter(i => i.a).length;
+    st.textContent = `banco: ${ativos.toLocaleString("pt-BR")} ativos de ${BANCO.length.toLocaleString("pt-BR")} (${origem})`;
+    st.className = "status-banco ok";
+  };
   try {
     const local = await IDB.ler("banco").catch(() => null);
+
+    /* ---- modo nuvem: sincroniza com a tabela req_itens ---- */
+    if (sb) {
+      if (local && local.itens && local.itens.length) mostrar(local, "cache — sincronizando…");
+      else { st.textContent = "banco: baixando da nuvem…"; st.className = "status-banco"; }
+      try {
+        const mapa = new Map((local && local.itens || []).map(i => [String(i[0]), i]));
+        const desde = (local && local.sync) || null;
+        let marco = desde, baixados = 0, pagina = 0;
+        for (;;) {
+          let q = sb.from("req_itens")
+            .select("codigo,descricao,un,ativo,atualizado_em")
+            .order("atualizado_em", { ascending: true })
+            .range(pagina * 1000, pagina * 1000 + 999);
+          if (desde) q = q.gt("atualizado_em", desde);
+          const { data, error } = await q;
+          if (error) throw new Error(error.message);
+          for (const r of (data || [])) {
+            mapa.set(String(r.codigo), [String(r.codigo), r.descricao, r.un || "UN", r.ativo ? 1 : 0]);
+            if (!marco || r.atualizado_em > marco) marco = r.atualizado_em;
+          }
+          baixados += (data || []).length;
+          if (baixados && baixados % 5000 === 0) {
+            st.textContent = `banco: baixando da nuvem… ${baixados.toLocaleString("pt-BR")} itens`;
+            await new Promise(r => setTimeout(r, 0));
+          }
+          if (!data || data.length < 1000) break;
+          pagina++;
+        }
+        const reg = { v: 2, em: new Date().toISOString(), sync: marco, itens: [...mapa.values()] };
+        if (reg.itens.length) {
+          await IDB.gravar("banco", reg).catch(() => {});
+          mostrar(reg, baixados ? `nuvem · ${baixados.toLocaleString("pt-BR")} sincronizados` : "nuvem · em dia");
+          return;
+        }
+        st.textContent = "banco: nuvem vazia — importe o .xlsx em “Banco de itens”";
+        st.className = "status-banco erro";
+        return;
+      } catch (e) {
+        if (local && local.itens && local.itens.length) { mostrar(local, "cache local — nuvem indisponível"); return; }
+        st.textContent = "banco: erro na nuvem (" + e.message + ")";
+        st.className = "status-banco erro";
+        return;
+      }
+    }
+
+    /* ---- modo local (sem Supabase configurado): igual antes ---- */
     let web = null, urlWeb = "";
     for (const url of ["dados/banco.json", "dados/banco.exemplo.json"]) {
       try {
@@ -130,24 +235,16 @@ async function carregarBanco() {
         web = await r.json(); urlWeb = url; break;
       } catch { /* tenta o próximo */ }
     }
-    // escolhe a fonte mais recente (permite atualizar via repositório OU via importação local)
     const escolhido = (tempoDe(local) >= tempoDe(web) && local && local.itens && local.itens.length)
       ? { reg: local, origem: "deste navegador" }
-      : (web && web.itens && web.itens.length ? { reg: web, origem: urlWeb.includes("exemplo") ? "EXEMPLO — importe o real" : "do site (dados/banco.json)" } : null);
-
+      : (web && web.itens && web.itens.length ? { reg: web, origem: urlWeb.includes("exemplo") ? "EXEMPLO — importe o real" : "do site" } : null);
     if (!escolhido) {
       st.textContent = "banco: vazio — clique em “Banco de itens” para importar o .xlsx";
       st.className = "status-banco erro";
       return;
     }
-    if (escolhido.reg === web && tempoDe(web) > tempoDe(local)) {
-      await IDB.gravar("banco", web).catch(() => {});   // sincroniza a cópia local
-    }
-    indexarBanco(escolhido.reg.itens);
-    const ativos = BANCO.filter(i => i.a).length;
-    const quando = tempoDe(escolhido.reg) ? " · " + dataBR(new Date(tempoDe(escolhido.reg)).toISOString().slice(0, 10)) : "";
-    st.textContent = `banco: ${ativos.toLocaleString("pt-BR")} ativos de ${BANCO.length.toLocaleString("pt-BR")} (${escolhido.origem}${quando})`;
-    st.className = "status-banco ok";
+    if (escolhido.reg === web && tempoDe(web) > tempoDe(local)) await IDB.gravar("banco", web).catch(() => {});
+    mostrar(escolhido.reg, escolhido.origem);
   } catch (e) {
     st.textContent = "banco: erro ao carregar (" + e.message + ")";
     st.className = "status-banco erro";
@@ -209,34 +306,52 @@ async function importarArquivoBanco(arquivo) {
   const vistos = new Set();
   let qNovos = 0, qAtualizados = 0, qReativados = 0, qDesativados = 0;
 
+  const alterados = [];                      // apenas o que mudou vai para a nuvem
   for (const [c, d, u, a] of novos) {
     vistos.add(c);
     const ant = anterior.get(c);
-    if (!ant) { anterior.set(c, [c, d, u, a]); qNovos++; continue; }
+    if (!ant) { anterior.set(c, [c, d, u, a]); alterados.push([c, d, u, a]); qNovos++; continue; }
+    const mudou = ant[1] !== d || ant[2] !== u || ant[3] !== a;
     if (ant[3] === 0 && a === 1) qReativados++;
-    else if (ant[1] !== d || ant[2] !== u || ant[3] !== a) qAtualizados++;
+    else if (mudou) qAtualizados++;
+    if (mudou) alterados.push([c, d, u, a]);
     anterior.set(c, [c, d, u, a]);           // sobrescreve nome/unidade/situação
   }
   // desativa o que sumiu do arquivo — só quando o arquivo parece ser a base completa
   const baseCompleta = novos.length >= anterior.size * 0.5;
   if (baseCompleta) {
     for (const [c, reg] of anterior) {
-      if (!vistos.has(c) && reg[3] === 1) { reg[3] = 0; qDesativados++; }
+      if (!vistos.has(c) && reg[3] === 1) { reg[3] = 0; qDesativados++; alterados.push([...reg]); }
     }
   }
 
   const itens = [...anterior.values()];
   prog.textContent = "Salvando no navegador…";
-  const registro = { v: 2, em: new Date().toISOString(), itens };
+  const agora = new Date().toISOString();
+  const registro = { v: 2, em: agora, sync: agora, itens };
   await IDB.gravar("banco", registro);
   indexarBanco(itens);
+
+  /* envia as mudanças para a nuvem em lotes (todos da equipe passam a ver) */
+  if (sb && alterados.length) {
+    for (let i = 0; i < alterados.length; i += 1000) {
+      const lote = alterados.slice(i, i + 1000).map(([c, d, u, a]) => ({
+        codigo: c, descricao: d, un: u, ativo: a === 1, atualizado_em: agora,
+      }));
+      const { error } = await sb.from("req_itens").upsert(lote);
+      if (error) { prog.textContent = "Erro ao enviar para a nuvem: " + error.message; throw new Error(error.message); }
+      prog.textContent = `Enviando para a nuvem… ${Math.min(i + 1000, alterados.length).toLocaleString("pt-BR")} de ${alterados.length.toLocaleString("pt-BR")}`;
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
 
   prog.innerHTML = `<strong>Mesclagem concluída:</strong> ${qNovos.toLocaleString("pt-BR")} novos · `
     + `${qAtualizados.toLocaleString("pt-BR")} atualizados · ${qReativados.toLocaleString("pt-BR")} reativados · `
     + `${qDesativados.toLocaleString("pt-BR")} desativados`
     + (baseCompleta ? "" : "<br>⚠️ Arquivo pequeno em relação ao banco atual: nada foi desativado (parece uma carga parcial).")
     + `<br>Total agora: ${itens.length.toLocaleString("pt-BR")} itens. `
-    + `Para valer em todos os computadores, clique em “Baixar banco.json” e substitua o arquivo <code>dados/banco.json</code> no repositório.`;
+    + (sb ? "Enviado para a nuvem: toda a equipe já vê a base atualizada."
+          : "Para valer em todos os computadores, clique em “Baixar banco.json” e substitua o arquivo <code>dados/banco.json</code> no repositório.");
   const st = $("#status-banco");
   st.textContent = `banco: ${itens.filter(i => i[3] === 1).length.toLocaleString("pt-BR")} ativos de ${itens.length.toLocaleString("pt-BR")} (deste navegador · ${dataBR(hoje())})`;
   st.className = "status-banco ok";
@@ -252,6 +367,9 @@ async function baixarBancoJson() {
   a.download = "banco.json";
   a.click();
 }
+
+/* item cuja lupa foi clicada por último (verde) — lembra ao voltar do Google */
+let lupaMarcada = sessionStorage.getItem("rq.lupa") || "";
 
 /* ---------------- busca ---------------- */
 /* Todos os termos digitados precisam aparecer (em qualquer ordem).
@@ -271,12 +389,13 @@ function buscar(consulta, ignorarEspacos, limite = 60) {
     if (ok) {
       // pontuação simples: começo da descrição vale mais
       const pos = it.n.indexOf(termos[0]);
-      achados.push({ it, pos: (pos < 0 ? 999 : pos) + (it.a ? 0 : 10000) });
+      const usado = !!precos["C:" + it.c];           // já apareceu em alguma requisição
+      achados.push({ it, pos: (pos < 0 ? 999 : pos) + (it.a ? 0 : 10000) - (usado ? 100000 : 0) });
       if (achados.length >= 400) break;   // já há resultados de sobra
     }
   }
   achados.sort((a, b) => a.pos - b.pos || a.it.d.length - b.it.d.length);
-  return achados.slice(0, limite).map(a => a.it);
+  return achados.slice(0, limite).map(a => ({ ...a.it, usado: a.usado }));
 }
 
 /* ---------------- modelos de dados ---------------- */
@@ -304,6 +423,7 @@ function render() {
   const app = $("#app");
   if (h.startsWith("#/lista/"))       telaEditor(app, h.slice(8));
   else if (h.startsWith("#/projeto/")) telaProjeto(app, h.slice(10));
+  else if (h === "#/minmax")           telaMinMax(app);
   else telaInicio(app);
 }
 
@@ -342,6 +462,7 @@ function telaInicio(app) {
       <h1>Listas de materiais</h1><span class="espacador"></span>
       <button class="btn" id="btn-nova-lista">+ Nova lista</button>
       <button class="btn sec" id="btn-novo-projeto">+ Novo projeto</button>
+      <a class="btn sec" href="#/minmax" title="Em preparação">Cadastro Mín/Máx</a>
     </div>
     ${projetos.length ? `<div class="secao-titulo">Projetos</div><div class="grade-cartoes">${projetos.map(cartaoProjeto).join("")}</div>` : ""}
     <div class="secao-titulo">Requisições</div>
@@ -361,7 +482,7 @@ function telaInicio(app) {
     }
     const l = novaLista(titulo.trim() || "Nova requisição", projetoId);
     l.descricao = "";
-    listas.push(l); salvarTudo();
+    listas.push(l); salvarTudo(); nuvemSalvarLista(l);
     location.hash = "#/lista/" + l.id;
   };
   $("#btn-nova-lista").onclick = criarLista;
@@ -369,26 +490,27 @@ function telaInicio(app) {
   $("#btn-novo-projeto").onclick = () => {
     const nome = prompt("Nome do projeto:");
     if (!nome) return;
-    projetos.push({ id: uid(), nome: nome.trim() }); salvarTudo(); render();
+    const p = { id: uid(), nome: nome.trim() };
+    projetos.push(p); salvarTudo(); nuvemSalvarProjeto(p); render();
   };
   app.onclick = (e) => {
     const d = e.target.dataset || {};
     if (d.excluirLista) {
       const l = listas.find(x => x.id === d.excluirLista);
-      if (confirm(`Excluir a lista “${l.titulo}”?`)) { listas = listas.filter(x => x.id !== d.excluirLista); salvarTudo(); render(); }
+      if (confirm(`Excluir a lista “${l.titulo}”?`)) { listas = listas.filter(x => x.id !== d.excluirLista); salvarTudo(); nuvemExcluirLista(d.excluirLista); render(); }
     }
     if (d.duplicar) {
       const o = listas.find(x => x.id === d.duplicar);
       const c = JSON.parse(JSON.stringify(o));
       c.id = uid(); c.titulo = o.titulo + " (cópia)"; c.criadoEm = hoje();
-      listas.push(c); salvarTudo(); render();
+      listas.push(c); salvarTudo(); nuvemSalvarLista(c); render();
     }
     if (d.excluirProjeto) {
       const p = projetos.find(x => x.id === d.excluirProjeto);
       if (confirm(`Excluir o projeto “${p.nome}”? As listas continuam existindo, apenas sem o vínculo.`)) {
-        listas.forEach(l => { if (l.projetoId === d.excluirProjeto) l.projetoId = ""; });
+        listas.forEach(l => { if (l.projetoId === d.excluirProjeto) { l.projetoId = ""; nuvemSalvarLista(l); } });
         projetos = projetos.filter(x => x.id !== d.excluirProjeto);
-        salvarTudo(); render();
+        salvarTudo(); nuvemExcluirProjeto(d.excluirProjeto); render();
       }
     }
   };
@@ -438,16 +560,37 @@ function telaProjeto(app, id) {
 
   $("#btn-renomear").onclick = () => {
     const n = prompt("Novo nome do projeto:", p.nome);
-    if (n) { p.nome = n.trim(); salvarTudo(); render(); }
+    if (n) { p.nome = n.trim(); salvarTudo(); nuvemSalvarProjeto(p); render(); }
   };
   window.criarListaNoProjeto = (pid) => {
     const t = prompt("Título da lista:", "");
     if (t === null) return false;
     const l = novaLista(t.trim() || "Nova requisição", pid);
-    listas.push(l); salvarTudo();
+    listas.push(l); salvarTudo(); nuvemSalvarLista(l);
     location.hash = "#/lista/" + l.id;
     return false;
   };
+}
+
+/* ============================================================
+   TELA: CADASTRO DE MÍNIMO E MÁXIMO (estrutura pronta p/ implementação)
+   Quando formos implementar: mesma mecânica do editor de requisição
+   (busca no banco + formulário padrão + prévia para PDF).
+   ============================================================ */
+function telaMinMax(app) {
+  app.innerHTML = `
+    <div class="pagina-titulo">
+      <h1>Requisição de cadastro de Mínimo e Máximo</h1>
+      <span class="espacador"></span>
+      <a class="btn sec" href="#/">← Voltar</a>
+    </div>
+    <div class="vazio">
+      <p style="font-size:15px"><strong>Tela reservada — implementação em breve.</strong></p>
+      <p>O fluxo será igual ao das requisições de material: buscar o item no banco,<br>
+      preencher o formulário padrão de mín/máx e gerar o PDF no layout oficial.</p>
+      <p style="color:#999;font-size:12px">Para implementarmos, será necessário o modelo do formulário padrão<br>
+      (planilha ou PDF preenchido), como foi feito com a Requisição de Material.</p>
+    </div>`;
 }
 
 /* ============================================================
@@ -456,7 +599,12 @@ function telaProjeto(app, id) {
 function telaEditor(app, id) {
   const L = listas.find(x => x.id === id);
   if (!L) { location.hash = "#/"; return; }
-  const salvar = () => { salvarTudo(); };
+  let tNuvem = null;
+  const salvar = () => {
+    salvarTudo();
+    clearTimeout(tNuvem);
+    tNuvem = setTimeout(() => nuvemSalvarLista(L), 800);   // envia após parar de digitar
+  };
 
   app.innerHTML = `
   <div class="pagina-titulo no-print">
@@ -467,7 +615,8 @@ function telaEditor(app, id) {
     </select>
     <span class="espacador"></span>
     <a class="btn sec" href="#/">← Voltar</a>
-    <button class="btn" id="btn-pdf">🖨️ Gerar PDF</button>
+    <button class="btn sec" id="btn-imprimir">🖨️ Imprimir</button>
+    <button class="btn" id="btn-pdf">📤 Baixar / Compartilhar PDF</button>
   </div>
 
   <div class="editor">
@@ -500,24 +649,59 @@ function telaEditor(app, id) {
 
   $("#ed-titulo").oninput = (e) => { L.titulo = e.target.value; salvar(); };
   $("#ed-projeto").onchange = (e) => { L.projetoId = e.target.value; salvar(); };
-  $("#btn-pdf").onclick = () => {
+  $("#btn-imprimir").onclick = () => {
     const tituloAntes = document.title;
     document.title = L.titulo.replace(/[\\/:*?"<>|]/g, "-");   // vira o nome do PDF
     window.print();
     setTimeout(() => { document.title = tituloAntes; }, 500);
   };
 
+  /* gera um ARQUIVO .pdf (funciona no celular) e abre o compartilhar do sistema */
+  $("#btn-pdf").onclick = async () => {
+    const btn = $("#btn-pdf");
+    btn.disabled = true; btn.textContent = "Gerando PDF…";
+    try {
+      const nome = (L.titulo || "requisicao").replace(/[\\/:*?"<>|]/g, "-") + ".pdf";
+      document.body.classList.add("modo-pdf");               // aparência de impressão
+      await new Promise(r => setTimeout(r, 60));
+      const blob = await html2pdf().set({
+        margin: 5,
+        filename: nome,
+        image: { type: "jpeg", quality: 0.97 },
+        html2canvas: { scale: 2, useCORS: true, windowWidth: 1180 },
+        jsPDF: { unit: "mm", format: "a4", orientation: "landscape" },
+        pagebreak: { mode: ["css", "legacy"] },
+      }).from($(".folha")).outputPdf("blob");
+      document.body.classList.remove("modo-pdf");
+
+      const arquivo = new File([blob], nome, { type: "application/pdf" });
+      if (navigator.canShare && navigator.canShare({ files: [arquivo] })) {
+        try { await navigator.share({ files: [arquivo], title: L.titulo }); }
+        catch (e) { if (e.name !== "AbortError") baixarBlob(blob, nome); }
+      } else {
+        baixarBlob(blob, nome);                               // desktop: só baixa
+      }
+    } catch (e) {
+      document.body.classList.remove("modo-pdf");
+      alert("Erro ao gerar o PDF: " + e.message);
+    }
+    btn.disabled = false; btn.textContent = "📤 Baixar / Compartilhar PDF";
+  };
+
   /* ---------- busca ---------- */
   let selecionado = -1, resultadosAtuais = [];
+  let lupaAtiva = sessionStorage.getItem("rq.lupa") || "";   // código do item em análise no Google
   const caixa = $("#busca");
   const desenharResultados = () => {
     const alvo = $("#resultados");
     alvo.innerHTML = resultadosAtuais.map((r, i) => {
       const ph = precoLembrado({ codigo: r.c, descricao: r.d });
-      return `<div class="resultado ${i === selecionado ? "ativo" : ""}" data-i="${i}">
+      const usada = precos["C:" + r.c] ? "usada" : "";
+      const marcada = lupaMarcada === r.c ? "marcada" : "";
+      return `<div class="resultado ${usada} ${i === selecionado ? "ativo" : ""}" data-i="${i}">
         <span class="cod">${esc(r.c)}</span><span class="desc">${esc(r.d)}${r.a ? "" : ' <span class="badge-inativo">DESATIVADO</span>'}</span>
         <span class="un">${esc(r.u)}</span>${ph ? `<span class="preco-hist">${dinheiro(ph)}</span>` : ""}
-        <button class="lupa" data-lupa="${i}" title="Pesquisar este item no Google (nova guia)">+🔍</button>
+        <button class="lupa ${marcada}" data-lupa="${i}" title="Pesquisar este item no Google (nova guia)">+🔍</button>
       </div>`;
     }).join("");
     $("#contagem").textContent = resultadosAtuais.length
@@ -527,6 +711,9 @@ function telaEditor(app, id) {
     $$(".lupa", alvo).forEach(el => el.onclick = (e) => {
       e.stopPropagation();                                   // não adiciona o item à lista
       const r = resultadosAtuais[+el.dataset.lupa];
+      lupaMarcada = r.c;                                     // só uma lupa verde por vez
+      sessionStorage.setItem("rq.lupa", lupaMarcada);
+      desenharResultados();
       window.open("https://www.google.com/search?q=" + encodeURIComponent('"' + r.d + '"'), "_blank");
     });
   };
@@ -718,6 +905,14 @@ function telaEditor(app, id) {
   caixa.focus();
 }
 
+function baixarBlob(blob, nome) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = nome;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
 /* ============================================================
    Modais: banco e backup
    ============================================================ */
@@ -760,7 +955,12 @@ function ligarModais() {
       if (!confirm("Importar backup? Isso SUBSTITUI as listas, projetos e preços atuais deste navegador.")) return;
       projetos = j.projetos || []; listas = j.listas || []; precos = j.precos || {};
       salvarTudo(); render();
-      alert("Backup importado.");
+      if (sb) {
+        for (const p of projetos) await nuvemSalvarProjeto(p);
+        for (const l of listas) await nuvemSalvarLista(l);
+        for (const [chave, reg] of Object.entries(precos)) await nuvemSalvarPreco(chave, reg);
+      }
+      alert("Backup importado" + (sb ? " e enviado para a nuvem." : "."));
     } catch (err) { alert("Arquivo inválido: " + err.message); }
     e.target.value = "";
   };
@@ -777,17 +977,42 @@ async function sha256(txt) {
   const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(txt));
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
 }
-function ligarLogin() {
+
+/* aoAutenticar: chamado quando o usuário está liberado para usar o app */
+async function ligarLogin(aoAutenticar) {
   const tela = $("#tela-login");
-  if (localStorage.getItem("rq.acesso") === SENHA_HASH) { tela.hidden = true; return; }
+
+  /* ----- modo NUVEM: login multiusuário do Supabase (mesmas contas do painel de gestão) ----- */
+  if (sb) {
+    $("#email").hidden = false;
+    const { data: { session } } = await sb.auth.getSession();
+    if (session) { tela.hidden = true; $("#btn-sair").hidden = false; aoAutenticar(); return; }
+    tela.hidden = false; $("#email").focus();
+    $("#form-login").onsubmit = async (e) => {
+      e.preventDefault();
+      $("#login-erro").textContent = "Entrando…";
+      const { error } = await sb.auth.signInWithPassword({
+        email: $("#email").value.trim(),
+        password: $("#senha").value,
+      });
+      if (error) { $("#login-erro").textContent = "E-mail ou senha incorretos."; $("#senha").select(); return; }
+      tela.hidden = true; $("#btn-sair").hidden = false;
+      aoAutenticar();
+    };
+    return;
+  }
+
+  /* ----- modo LOCAL: senha única (como antes) ----- */
+  if (localStorage.getItem("rq.acesso") === SENHA_HASH) { tela.hidden = true; aoAutenticar(); return; }
   tela.hidden = false;
   $("#senha").focus();
   $("#form-login").onsubmit = async (e) => {
     e.preventDefault();
     const h = await sha256($("#senha").value);
     if (h === SENHA_HASH) {
-      localStorage.setItem("rq.acesso", h);   // não pede de novo neste navegador
+      localStorage.setItem("rq.acesso", h);
       tela.hidden = true;
+      aoAutenticar();
     } else {
       $("#login-erro").textContent = "Senha incorreta.";
       $("#senha").select();
@@ -796,7 +1021,10 @@ function ligarLogin() {
 }
 
 /* ---------------- inicialização ---------------- */
-ligarLogin();
 ligarModais();
-render();
-carregarBanco();
+render();                                   // abre com o cache local na hora
+$("#btn-sair").onclick = async () => { if (sb) await sb.auth.signOut(); location.reload(); };
+ligarLogin(() => {                          // dados só depois de autenticado
+  carregarBanco();
+  carregarNuvem();
+});

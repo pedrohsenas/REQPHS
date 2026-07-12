@@ -25,7 +25,23 @@ O site pede uma senha única (sem usuário) na primeira visita e memoriza o aces
 
 > A senha é uma cortina de privacidade, não segurança forte: num site estático o conteúdo é público para quem tiver o link. Por isso o banco da empresa deve continuar sendo importado localmente, nunca publicado no repositório público.
 
-## Carregar o banco de itens (escolha UMA das opções)
+## Modo multiusuário (Supabase) — recomendado
+
+O site funciona em dois modos. Com o **Supabase configurado**, tudo (listas, projetos, preços e o banco de 184 mil itens) fica on-line e compartilhado entre a equipe, com login individual por e-mail/senha. Use um **projeto Supabase novo e dedicado** às requisições — separado do painel de gestão — para isolar os dados e evitar que um sistema interfira no outro (limites de uso, pausas, backups e manutenções ficam independentes).
+
+1. Em [supabase.com](https://supabase.com) → **New project**: crie o projeto (ex.: `requisicoes-uis3`), escolha a região `South America (São Paulo)` e guarde a senha do banco.
+2. No projeto novo, abra **SQL Editor**, cole o conteúdo de `supabase.sql` e execute (cria as tabelas `req_*`).
+3. Em **Settings → API**, copie a **URL** e a chave **anon public** para o arquivo `config.js` e faça commit.
+4. Em **Authentication → Users → Add user**, cadastre os e-mails/senhas da equipe (as contas do painel de gestão **não** migram sozinhas — logins são por projeto; pode repetir os mesmos e-mails e senhas). Dica: em **Authentication → Providers → Email**, desative "Confirm email" para os usuários entrarem sem precisar confirmar.
+5. Depois de logado, importe o .xlsx uma vez pelo botão "Banco de itens": a base sobe para a nuvem e todos os dispositivos passam a sincronizar automaticamente (as cargas seguintes enviam só as diferenças).
+
+Com `config.js` em branco, o site roda 100% local, como antes (senha fixa + banco no navegador).
+
+## Celular
+
+O layout se adapta ao celular (busca em cima, documento embaixo, rolando na horizontal com o dedo). O botão **"📤 Baixar / Compartilhar PDF"** gera o arquivo .pdf no próprio aparelho e abre a janela de compartilhamento do sistema (WhatsApp, e-mail etc.). No computador, o mesmo botão baixa o arquivo; o botão **"🖨️ Imprimir"** continua disponível para o PDF vetorial via impressão.
+
+## Carregar o banco de itens sem Supabase (escolha UMA das opções)
 
 **Opção A — recomendada (repositório público, dados privados):**
 Abra o site → botão **"Banco de itens"** → selecione o .xlsx da empresa. A conversão acontece no navegador (leva alguns segundos para 19 MB) e os itens ficam salvos localmente. Nada é enviado para a internet. Repita quando quiser atualizar o banco.
