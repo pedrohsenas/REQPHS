@@ -517,12 +517,18 @@ function telaEditor(app, id) {
       return `<div class="resultado ${i === selecionado ? "ativo" : ""}" data-i="${i}">
         <span class="cod">${esc(r.c)}</span><span class="desc">${esc(r.d)}${r.a ? "" : ' <span class="badge-inativo">DESATIVADO</span>'}</span>
         <span class="un">${esc(r.u)}</span>${ph ? `<span class="preco-hist">${dinheiro(ph)}</span>` : ""}
+        <button class="lupa" data-lupa="${i}" title="Pesquisar este item no Google (nova guia)">+🔍</button>
       </div>`;
     }).join("");
     $("#contagem").textContent = resultadosAtuais.length
       ? `${resultadosAtuais.length} resultado(s)` + (resultadosAtuais.length >= 60 ? " — refine a busca para ver mais" : "")
       : (caixa.value.trim() ? "Nada encontrado. Tente menos termos ou marque “ignorar espaços”." : "");
     $$(".resultado", alvo).forEach(el => el.onclick = () => adicionarDoBanco(resultadosAtuais[+el.dataset.i]));
+    $$(".lupa", alvo).forEach(el => el.onclick = (e) => {
+      e.stopPropagation();                                   // não adiciona o item à lista
+      const r = resultadosAtuais[+el.dataset.lupa];
+      window.open("https://www.google.com/search?q=" + encodeURIComponent('"' + r.d + '"'), "_blank");
+    });
   };
   let timer = null;
   caixa.oninput = () => {
