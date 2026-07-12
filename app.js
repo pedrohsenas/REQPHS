@@ -1104,7 +1104,7 @@ function telaEditor(app, id) {
         <td class="d-qtd"><input data-max="${idx}" value="${i.qtdMax ? fmtQtd(i.qtdMax) : ""}" inputmode="decimal" style="text-align:center"></td>
         <td class="d-cent">${esc(i.codigo)}</td>
         <td class="d-preco"><span>R$</span><input data-preco="${idx}" value="${i.preco ? fmtBR.format(i.preco) : ""}" inputmode="decimal" style="text-align:right"></td>
-        <td class="d-num">${(i.qtdMin && i.preco) ? "R$ " + fmtBR.format(i.qtdMin * i.preco) : ""}</td>
+        <td>${(i.qtdMin && i.preco) ? `<span class="val-flex"><span>R$</span><span>${fmtBR.format(i.qtdMin * i.preco)}</span></span>` : ""}</td>
         <td class="d-just"><input data-just="${idx}" value="${esc(i.justificativa || "")}" placeholder=""></td>
         <td class="d-remover no-print"><button data-remover="${idx}" title="Remover">✕</button></td>
       </tr>`;
@@ -1144,9 +1144,9 @@ function telaEditor(app, id) {
           <table class="mm-linha6">
             <tr>
               <td style="width:44%"><span class="rotulo">SOLICITANTE:</span> <input data-l="solicitante" value="${esc(L.solicitante)}" style="width:calc(100% - 92px);display:inline-block"></td>
-              <td style="width:6%" class="rotulo">SETOR:</td>
-              <td style="width:20%">
-                <select data-l="setor" style="width:100%;background:#fffbe6;border:none">
+              <td class="rotulo" style="width:6%;text-align:center">SETOR:</td>
+              <td style="width:20%" class="d-cent">
+                <select data-l="setor" style="width:100%;background:#fffbe6;border:none;text-align:center;text-align-last:center">
                   <option value="">— selecione —</option>
                   ${setores.map(s => `<option ${s.nome === L.setor ? "selected" : ""}>${esc(s.nome)}</option>`).join("")}
                 </select>
@@ -1162,7 +1162,7 @@ function telaEditor(app, id) {
       <!-- descrição fixa do processo -->
       <tr>
         <td class="d-descricao"><span class="rotulo">DESCRIÇÃO DO PRODUTO/PROCESSO À SER COMPRADO:</span></td>
-        <td colspan="7" class="d-cent d-valor"><input data-l="descricao" value="${esc(L.descricao || "RELAÇÃO DE MÍNIMOS E MÁXIMOS PARA COMPRA")}" style="text-align:center;font-weight:700"></td>
+        <td colspan="7" class="d-valor"><input data-l="descricao" value="${esc(L.descricao || "RELAÇÃO DE MÍNIMOS E MÁXIMOS PARA COMPRA")}" style="text-align:left;font-weight:700"></td>
         <td class="d-remover no-print"></td>
       </tr>
 

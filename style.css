@@ -200,7 +200,13 @@ table.mm-num tr:first-child td, table.mm-linha6 tr:first-child td, table.mm-assi
 table.mm-num td:first-child, table.mm-linha6 td:first-child, table.mm-assina td:first-child{border-left:none}
 table.mm-num td:last-child, table.mm-linha6 td:last-child, table.mm-assina td:last-child{border-right:none}
 table.mm-num tr:last-child td, table.mm-linha6 tr:last-child td, table.mm-assina tr:last-child td{border-bottom:none}
-table.mm-assina .d-ass-rot td{font-size:8.5px}
+table.mm-assina .d-ass-rot td{font-size:8.5px; text-align:left}          /* vistos do MM: à esquerda, como no original */
+table.mm-assina .d-ass-area td{text-align:left; vertical-align:bottom}
+table.mm-assina .d-ass-nome, table.mm-assina .d-ass-cargo{text-align:left}
+/* R$ à esquerda + valor à direita (VALOR UN e VALOR TOTAL) */
+.val-flex{display:flex; justify-content:space-between; align-items:center; padding:0 2px}
+tr.d-item td.d-preco span:first-child{float:left}
+tr.d-item td.d-preco input{float:right}
 td.d-just input{width:100%}
 tr.d-item td.d-just{padding:1px 3px}
 
