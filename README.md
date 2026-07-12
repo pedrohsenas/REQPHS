@@ -9,13 +9,13 @@ Site estático (sem servidor) para criar listas de materiais a partir do banco d
 - **Prévia A4 ao vivo** idêntica ao formulário "REQUISIÇÃO DE MATERIAL": código e unidade vêm do banco; quantidade e preço você digita direto na folha.
 - **Memória de preços**: o último preço unitário usado para um item é sugerido automaticamente nas próximas listas; editar o preço atualiza a memória.
 - **Assinaturas por alçada**: até R$ 3.000 → Pedro + Alex; até R$ 20.000 → Pedro + Alex + Jaisson; acima → Alex + Jaisson + Ademilson. Cada bloco tem um seletor para trocar manualmente por qualquer pessoa da lista.
-- **Gerar PDF**: botão que abre a impressão do navegador (Destino → "Salvar como PDF"). Os campos editáveis saem como texto normal, no layout do modelo.
+- **Gerar PDF**: botão que abre a impressão do navegador (Destino → "Salvar como PDF"). O documento sai em **A4 paisagem**, idêntico ao padrão oficial: zebra cinza nas linhas, faixa amarela do total, logotipo e blocos de visto. Na impressão, marque **"Gráficos de fundo"** (Mais configurações) para as cores da zebra e do total saírem no PDF.
 - **Backup**: exporta/importa um .json com todas as listas, projetos e preços.
 
 ## Publicar no GitHub Pages
 
 1. Crie um repositório no GitHub (pode ser **público**, desde que você NÃO suba o banco da empresa — veja abaixo).
-2. Envie os arquivos desta pasta (`index.html`, `style.css`, `app.js`, `dados/`, `conversor/`) **e um arquivo `logo.png`** com o logotipo (aparece no topo, na tela de senha e no cabeçalho do PDF; sem ele, o site usa um texto no lugar).
+2. Envie os arquivos desta pasta (`index.html`, `style.css`, `app.js`, `dados/`, `conversor/`) **e o `favicon.svg`** (logotipo oficial — aparece no topo, na tela de senha, no cabeçalho do documento e como ícone da aba).
 3. No repositório: **Settings → Pages → Source: Deploy from a branch → Branch: main / (root) → Save**.
 4. Em ~1 minuto o site estará em `https://SEU-USUARIO.github.io/NOME-DO-REPO/`.
 

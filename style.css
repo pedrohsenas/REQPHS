@@ -109,80 +109,78 @@ table.app tr:last-child td{border-bottom:none}
 .dica{font-size:12px; color:var(--cinza); background:var(--fundo); border-radius:6px; padding:8px 10px; margin-top:10px}
 
 /* ============================================================
-   FOLHA A4 — réplica do modelo Excel "REQUISIÇÃO DE MATERIAL"
+   FOLHA — réplica fiel do PDF oficial (A4 PAISAGEM)
+   Uma única tabela de 6 colunas alinhadas como no documento.
    ============================================================ */
 .folha-envolve{display:flex; flex-direction:column; gap:12px; min-width:0}
 .folha-barra{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
 .folha-barra .total-vivo{font-weight:700; font-size:15px; margin-left:auto}
+.folha-rolagem{overflow-x:auto}
 
 .folha{
-  background:#fff; width:210mm; max-width:100%; min-height:297mm; margin:0 auto;
-  padding:10mm 9mm; box-shadow:0 4px 22px rgba(0,0,0,.18);
-  font-family:Arial, Helvetica, sans-serif; font-size:10.5px; color:#000;
+  background:#fff; width:297mm; min-height:210mm; margin:0 auto;
+  padding:6mm; box-shadow:0 4px 22px rgba(0,0,0,.18);
+  font-family:Calibri,Carlito,"Segoe UI",Arial,sans-serif; font-size:10.5px; color:#000;
 }
 .folha *{font-family:inherit}
-.folha input, .folha textarea, .folha select{
-  border:none; border-radius:0; padding:1px 3px; font-size:inherit; width:100%;
-  background:#fffbe6;                 /* amarelo suave = campo editável (some na impressão) */
+.folha input, .folha textarea{
+  border:none; border-radius:0; padding:0 2px; font-size:inherit; width:100%;
+  background:#fffbe6; color:inherit; font-weight:inherit; text-align:inherit;
 }
 .folha input:focus, .folha textarea:focus{outline:1.5px solid var(--vermelho)}
-.folha textarea{resize:vertical; min-height:34px}
+.folha textarea{resize:vertical; min-height:30px; display:block}
 
-/* cabeçalho do formulário */
-.f-topo{display:grid; grid-template-columns:34mm 1fr 46mm 30mm; border:1.5px solid #000}
-.f-topo > div{border-left:1.5px solid #000; display:flex; align-items:center; justify-content:center; flex-direction:column; padding:2px 4px}
-.f-topo > div:first-child{border-left:none}
-.f-logo{font-size:26px; font-weight:800; color:var(--vermelho); letter-spacing:1px}
-.f-logo small{font-size:8px; color:#000; font-weight:400; letter-spacing:0}
-.f-titulo{font-size:15px; font-weight:700; text-align:center}
-.f-num{font-size:10px; text-align:center; font-weight:700}
-.f-controle{font-size:7.5px; text-align:center; line-height:1.35}
+table.doc{width:100%; border-collapse:collapse; border:2px solid #000; table-layout:fixed}
+table.doc td{border:1px solid #000; padding:1px 4px; vertical-align:middle; overflow:hidden}
+/* trilhas de coluna idênticas ao PDF: A 18.6 / B 32.4 / C 5.1 / D 12.9 / E 13.2 / F 17.8 */
+col.cA{width:18.6%} col.cB{width:32.4%} col.cC{width:5.1%}
+col.cD{width:12.9%} col.cE{width:13.2%} col.cF{width:17.8%}
+col.cX{width:7mm}
 
-.f-grade{display:grid; border:1.5px solid #000; border-top:none}
-.f-rotulo{background:#d9d9d9; font-weight:700; font-size:9px; padding:1px 4px; border-bottom:1px solid #000}
-.f-celula{border-left:1px solid #000; display:flex; flex-direction:column}
-.f-celula:first-child{border-left:none}
-.f-celula .valor-celula{padding:1px 2px; min-height:16px; display:flex; align-items:center}
-.linha-5{grid-template-columns:1.1fr 1.6fr 1fr .7fr .7fr}
-.linha-desc{grid-template-columns:1fr}
-.linha-desc .f-celula{border-left:none}
-.linha-desc textarea{min-height:52px}
+/* cabeçalho */
+td.d-logo{text-align:center; padding:4px}
+td.d-logo img{height:13mm; max-width:90%; object-fit:contain; display:block; margin:0 auto}
+td.d-titulo{font-size:17px; font-weight:700; text-align:center}
+td.d-numero{font-weight:700; vertical-align:top; font-size:10px}
+td.d-numero .rotulo{display:block}
+td.d-anexos{background:#fff}
+
+.d-rot-min{font-size:8.5px; padding:0 3px; height:12px}
+.d-rot-cent{font-weight:700; text-align:center; font-size:10px}
+.d-valor{font-weight:700}
+.d-cent{text-align:center}
+
+td.d-descricao{padding:3px 4px; font-size:10px; line-height:1.3}
+td.d-descricao .rotulo{font-weight:700}
 
 /* tabela de itens */
-table.f-itens{width:100%; border-collapse:collapse; border:1.5px solid #000; border-top:none}
-table.f-itens th{
-  background:#d9d9d9; border:1px solid #000; font-size:9.5px; padding:2px 3px; font-weight:700;
-}
-table.f-itens td{border:1px solid #000; padding:1px 2px; height:16px; font-size:10px; vertical-align:middle}
-table.f-itens .c-cod{width:16mm; text-align:center}
-table.f-itens .c-un{width:12mm; text-align:center}
-table.f-itens .c-qtd{width:13mm}
-table.f-itens .c-custo{width:24mm}
-table.f-itens .c-valor{width:24mm; text-align:right}
-table.f-itens input{text-align:right}
-table.f-itens td.c-valor{padding-right:4px; font-variant-numeric:tabular-nums}
-.f-remover{
-  width:6mm; border:none !important; background:none; text-align:center;
-}
-.f-remover button{
-  border:none; background:none; color:var(--vermelho); cursor:pointer; font-size:13px; line-height:1;
-}
-tr.f-total td{font-weight:700}
-tr.f-total .rot{text-align:right; background:#d9d9d9}
+tr.d-cab-itens td{font-weight:700; text-align:center; font-size:10.5px}
+tr.d-item td{height:15px; font-size:10px}
+tr.d-item.zebra td{background:#d9d9d9}
+tr.d-item.zebra input{background:#efe9c9}
+td.d-desc-item{white-space:nowrap; text-overflow:ellipsis}
+td.d-num{text-align:right}
+tr.d-item .d-qtd input{text-align:center}
+tr.d-item td.d-preco{padding:1px 3px; white-space:nowrap}
+tr.d-item td.d-preco input{width:calc(100% - 18px); display:inline-block; vertical-align:middle}
+td.d-moeda{text-align:right}
+tr.d-total td{background:#ffc000; font-weight:700; height:16px}
+tr.d-total .rot{text-align:right; color:#7f3f00}
+tr.d-total .val{display:flex; justify-content:space-between; font-weight:700}
 
-/* observação e assinaturas */
-.f-obs{border:1.5px solid #000; border-top:none; display:flex; align-items:stretch}
-.f-obs .rot{background:#d9d9d9; font-weight:700; font-size:9px; padding:2px 4px; border-right:1px solid #000; display:flex; align-items:center}
-.f-obs input{background:#fffbe6}
-.f-assina{display:grid; grid-template-columns:1fr 1fr 1fr 1fr; border:1.5px solid #000; border-top:none}
-.f-ass-bloco{border-left:1px solid #000; padding:2px 4px 4px; min-height:24mm; display:flex; flex-direction:column}
-.f-ass-bloco:first-child{border-left:none}
-.f-ass-rot{font-weight:700; font-size:8.5px; text-align:center; border-bottom:1px solid #000; margin:-2px -4px 0; padding:1px; background:#d9d9d9}
-.f-ass-espaco{flex:1}
-.f-ass-nome{font-size:9px; text-align:center; border-top:1px solid #000; padding-top:2px; font-weight:600}
-.f-ass-cargo{font-size:8px; text-align:center; color:#222}
-.f-ass-troca{margin-top:3px}
-.f-ass-troca select{background:#fffbe6; font-size:9px; padding:0 1px}
+td.d-obs{height:52px; vertical-align:top; font-size:10px}
+td.d-obs .rotulo{font-weight:700}
+
+/* assinaturas */
+tr.d-ass-rot td{font-weight:700; text-align:center; font-size:10px; height:16px}
+tr.d-ass-area td{height:26mm; vertical-align:bottom; text-align:center; padding-bottom:3px}
+.d-ass-nome{font-weight:700; font-size:10px}
+.d-ass-cargo{font-size:9.5px}
+.d-ass-troca select{width:100%; font-size:9px; margin-top:3px; background:#fffbe6; border:1px dashed var(--linha)}
+
+/* coluna do X de remover (fora do documento) */
+td.d-remover{border:none !important; background:none; text-align:center; padding:0}
+td.d-remover button{border:none; background:none; color:var(--vermelho); cursor:pointer; font-size:13px; line-height:1}
 
 /* ---------- resumo de projeto ---------- */
 .resumo-blocos{display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin-bottom:18px}
@@ -227,16 +225,21 @@ tr.f-total .rot{text-align:right; background:#d9d9d9}
 .login-erro{color:var(--vermelho); font-size:12px; min-height:16px; margin:0}
 
 /* ============================================================
-   IMPRESSÃO — só a folha A4, campos viram texto puro
+   IMPRESSÃO — A4 paisagem, igual ao PDF oficial
    ============================================================ */
 @media print{
-  @page{size:A4; margin:8mm}
+  @page{size:A4 landscape; margin:7mm}
   body{background:#fff}
-  .no-print, #topo, .painel, .folha-barra, .f-remover, .f-ass-troca, .btn{display:none !important}
+  .no-print, #topo, .painel, .folha-barra, td.d-remover, .d-ass-troca, .btn, #tela-login{display:none !important}
+  col.cX{width:0 !important}
   main#app{max-width:none; padding:0}
   .editor{display:block}
+  .folha-rolagem{overflow:visible}
   .folha{width:auto; min-height:0; margin:0; padding:0; box-shadow:none}
-  .folha input, .folha textarea, .folha select{background:transparent}
+  .folha input, .folha textarea{background:transparent}
   .folha textarea{resize:none}
-  tr.f-vazia-oculta{display:table-row}   /* mantém linhas em branco como no Excel */
+  tr.d-item.zebra input{background:transparent}
+  tr.d-vazia{display:none}                 /* o PDF oficial não tem linhas em branco */
+  tr.d-item.zebra td{background:#d9d9d9 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact}
+  tr.d-total td{background:#ffc000 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact}
 }

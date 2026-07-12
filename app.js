@@ -498,98 +498,120 @@ function telaEditor(app, id) {
     L.itens.push(item); salvar(); desenharFolha();
   };
 
-  /* ---------- folha A4 (prévia = PDF) ---------- */
-  const LINHAS_MIN = 20;   // linhas em branco como no modelo Excel
+  /* ---------- folha (prévia = PDF oficial, A4 paisagem) ---------- */
+  const LINHAS_MIN = 10;   // linhas em branco só na tela; a impressão as oculta, como no PDF oficial
+  const fmtQtd = (n) => n ? new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 3 }).format(n) : "";
   function desenharFolha() {
     const total = totalDa(L);
     if (!L.assinaturasManuais) L.assinaturas = assinaturasPorValor(total);
     $("#total-vivo").textContent = "Total: " + dinheiro(total);
 
     const linhaItem = (i, idx) => `
-      <tr>
-        <td class="c-cod">${esc(i.codigo)}</td>
-        <td>${esc(i.descricao)}</td>
-        <td class="c-un">${esc(i.un)}</td>
-        <td class="c-qtd"><input data-qtd="${idx}" value="${i.qtd ?? ""}" inputmode="decimal"></td>
-        <td class="c-custo"><input data-preco="${idx}" value="${i.preco ? fmtBR.format(i.preco) : ""}" inputmode="decimal" placeholder="—"></td>
-        <td class="c-valor">${(i.qtd && i.preco) ? fmtBR.format(i.qtd * i.preco) : ""}</td>
-        <td class="f-remover no-print"><button data-remover="${idx}" title="Remover">✕</button></td>
+      <tr class="d-item ${idx % 2 ? "zebra" : ""}">
+        <td class="d-cent">${esc(i.codigo)}</td>
+        <td class="d-desc-item">${esc(i.descricao)}</td>
+        <td class="d-cent">${esc(i.un)}</td>
+        <td class="d-qtd"><input data-qtd="${idx}" value="${i.qtd ? fmtQtd(i.qtd) : ""}" inputmode="decimal"></td>
+        <td class="d-preco"><span>R$</span><input data-preco="${idx}" value="${i.preco ? fmtBR.format(i.preco) : ""}" inputmode="decimal" style="text-align:right"></td>
+        <td class="d-num">${(i.qtd && i.preco) ? "R$ " + fmtBR.format(i.qtd * i.preco) : ""}</td>
+        <td class="d-remover no-print"><button data-remover="${idx}" title="Remover">✕</button></td>
       </tr>`;
     const vazias = Math.max(0, LINHAS_MIN - L.itens.length);
-    const linhaVazia = `<tr class="f-vazia-oculta"><td class="c-cod">&nbsp;</td><td></td><td class="c-un"></td><td class="c-qtd"></td><td class="c-custo"></td><td class="c-valor"></td><td class="f-remover no-print"></td></tr>`;
+    const linhaVazia = `<tr class="d-item d-vazia"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td class="d-remover no-print"></td></tr>`;
 
-    const blocoAssin = (nome, i) => `
-      <div class="f-ass-bloco">
-        <div class="f-ass-rot">${i === 0 && L.assinaturas.includes(P.pedro) && nome === P.pedro ? "VISTO SOLICITANTE" : "VISTO AUTORIZAÇÃO"}</div>
-        <div class="f-ass-espaco"></div>
-        <div class="f-ass-nome">${esc(nome)}</div>
-        <div class="f-ass-cargo">${esc(cargoDe(nome))}</div>
-        <div class="f-ass-troca no-print">
+    /* assinaturas: colunas do PDF -> A | B | C+D | E+F(almoxarifado) */
+    const ass = [L.assinaturas[0] || "", L.assinaturas[1] || "", L.assinaturas[2] || ""];
+    const rotAss = (i, nome) =>
+      (i === 0 && nome === P.pedro) ? "VISTO SOLICITANTE" : "VISTO AUTORIZAÇÃO";
+    const celAss = (nome, i, colspan) => `
+      <td colspan="${colspan}">
+        ${nome ? `<div class="d-ass-nome">${esc(nome)}</div><div class="d-ass-cargo">${esc(cargoDe(nome))}</div>` : "&nbsp;"}
+        <div class="d-ass-troca no-print">
           <select data-ass="${i}">
+            <option value="" ${!nome ? "selected" : ""}>(sem assinatura)</option>
             ${PESSOAS.map(p => `<option ${p.nome === nome ? "selected" : ""}>${esc(p.nome)}</option>`).join("")}
-            <option value="__remover">(remover assinatura)</option>
           </select>
         </div>
-      </div>`;
+      </td>`;
 
     $("#folha").innerHTML = `
-      <div class="f-topo">
-        <div class="f-logo"><img src="logo.png" alt="Lar" onerror="this.outerHTML='Lar<small>Cooperativa Agroindustrial</small>'"></div>
-        <div class="f-titulo">REQUISIÇÃO DE MATERIAL</div>
-        <div class="f-num"><input data-l="numeroFO" value="${esc(L.numeroFO)}" style="text-align:center;font-weight:700"></div>
-        <div class="f-controle">Número<br>FO 012 232-12<br>Emissão: 19/06/15<br>Revisão: 31/10/19 · Nº 3</div>
-      </div>
+    <div class="folha-rolagem"><table class="doc">
+      <colgroup>
+        <col class="cA"><col class="cB"><col class="cC"><col class="cD"><col class="cE"><col class="cF"><col class="cX">
+      </colgroup>
 
-      <div class="f-grade linha-5">
-        <div class="f-celula"><div class="f-rotulo">LOCAL</div><div class="valor-celula"><input data-l="local" value="${esc(L.local)}"></div></div>
-        <div class="f-celula"><div class="f-rotulo">ÁREA/SETOR</div><div class="valor-celula"><input data-l="areaSetor" value="${esc(L.areaSetor)}"></div></div>
-        <div class="f-celula"><div class="f-rotulo">EMISSÃO</div><div class="valor-celula"><input type="date" data-l="emissao" value="${esc(L.emissao)}"></div></div>
-        <div class="f-celula"><div class="f-rotulo">REVISÃO</div><div class="valor-celula"><input data-l="revisao" value="${esc(L.revisao)}"></div></div>
-        <div class="f-celula"><div class="f-rotulo">Nº</div><div class="valor-celula"><input data-l="numero" value="${esc(L.numero)}"></div></div>
-      </div>
+      <!-- cabeçalho -->
+      <tr>
+        <td class="d-logo" rowspan="1"><img src="favicon.svg" alt="Lar" onerror="this.outerHTML='<b style=\'font-size:22px;color:#d5203b\'>Lar</b>'"></td>
+        <td class="d-titulo" colspan="2">REQUISIÇÃO DE MATERIAL</td>
+        <td class="d-numero" colspan="2"><span class="rotulo">NÚMERO</span><input data-l="numeroFO" value="${esc(L.numeroFO)}"></td>
+        <td class="d-anexos"></td><td class="d-remover no-print"></td>
+      </tr>
+      <tr class="d-rot-min">
+        <td>LOCAL</td><td colspan="2">ÁREA/SETOR</td>
+        <td class="d-rot-cent">EMISSÃO</td><td class="d-rot-cent">REVISÃO</td><td class="d-rot-cent">Nº</td><td class="d-remover no-print"></td>
+      </tr>
+      <tr class="d-valor">
+        <td><input data-l="local" value="${esc(L.local)}"></td>
+        <td colspan="2"><input data-l="areaSetor" value="${esc(L.areaSetor)}"></td>
+        <td class="d-cent"><input type="date" data-l="emissao" value="${esc(L.emissao)}" style="text-align:center"></td>
+        <td class="d-cent"><input data-l="revisao" value="${esc(L.revisao)}" style="text-align:center"></td>
+        <td class="d-cent"><input data-l="numero" value="${esc(L.numero)}" style="text-align:center"></td><td class="d-remover no-print"></td>
+      </tr>
 
-      <div class="f-grade linha-desc">
-        <div class="f-celula"><div class="f-rotulo">DESCRIÇÃO DO PRODUTO/ PROCESSO A SER COMPRADO</div>
-          <textarea data-l="descricao" placeholder="Descreva a finalidade da compra…">${esc(L.descricao)}</textarea></div>
-      </div>
+      <tr><td class="d-descricao" colspan="6">
+        <span class="rotulo">DESCRIÇÃO DO PRODUTO/ PROCESSO À SER COMPRADO:</span>
+        <textarea data-l="descricao" placeholder="Descreva a finalidade da compra…">${esc(L.descricao)}</textarea>
+      </td><td class="d-remover no-print"></td></tr>
 
-      <div class="f-grade linha-5">
-        <div class="f-celula"><div class="f-rotulo">DATA</div><div class="valor-celula"><input type="date" data-l="data" value="${esc(L.data)}"></div></div>
-        <div class="f-celula"><div class="f-rotulo">SOLICITANTE</div><div class="valor-celula"><input data-l="solicitante" value="${esc(L.solicitante)}"></div></div>
-        <div class="f-celula"><div class="f-rotulo">SETOR</div><div class="valor-celula"><input data-l="setor" value="${esc(L.setor)}"></div></div>
-        <div class="f-celula"><div class="f-rotulo">PROJETO</div><div class="valor-celula"><input data-l="projetoNum" value="${esc(L.projetoNum)}"></div></div>
-        <div class="f-celula"><div class="f-rotulo">NR O.S.</div><div class="valor-celula"><input data-l="nrOS" value="${esc(L.nrOS)}"></div></div>
-      </div>
+      <tr class="d-rot-cent" style="font-weight:700">
+        <td class="d-rot-cent">DATA</td><td class="d-rot-cent" colspan="2">SOLICITANTE</td>
+        <td class="d-rot-cent">SETOR</td><td class="d-rot-cent">PROJETO</td><td class="d-rot-cent">NR O.S.</td><td class="d-remover no-print"></td>
+      </tr>
+      <tr>
+        <td class="d-cent"><input type="date" data-l="data" value="${esc(L.data)}" style="text-align:center"></td>
+        <td class="d-cent" colspan="2"><input data-l="solicitante" value="${esc(L.solicitante)}" style="text-align:center"></td>
+        <td class="d-cent"><input data-l="setor" value="${esc(L.setor)}" style="text-align:center"></td>
+        <td class="d-cent"><input data-l="projetoNum" value="${esc(L.projetoNum)}" style="text-align:center"></td>
+        <td class="d-cent"><input data-l="nrOS" value="${esc(L.nrOS)}" style="text-align:center"></td><td class="d-remover no-print"></td>
+      </tr>
 
-      <table class="f-itens">
-        <thead><tr>
-          <th class="c-cod">Código</th><th>Descrição</th><th class="c-un">Unidade</th>
-          <th class="c-qtd">Qtd.</th><th class="c-custo">Custo Médio (Unitário)</th><th class="c-valor">Valor</th>
-          <th class="f-remover no-print"></th>
-        </tr></thead>
-        <tbody>
-          ${L.itens.map(linhaItem).join("")}
-          ${linhaVazia.repeat(vazias)}
-          <tr class="f-total">
-            <td colspan="4" style="border:none"></td>
-            <td class="rot">Valor total do pedido</td>
-            <td class="c-valor">${fmtBR.format(total)}</td>
-            <td class="f-remover no-print"></td>
-          </tr>
-        </tbody>
-      </table>
+      <!-- itens -->
+      <tr class="d-cab-itens">
+        <td>Código</td><td>Descrição</td><td>Unidade</td><td>Qtd.</td>
+        <td>Custo Médio (Unitário)</td><td>Valor</td><td class="d-remover no-print"></td>
+      </tr>
+      ${L.itens.map(linhaItem).join("")}
+      ${linhaVazia.repeat(vazias)}
+      <tr class="d-total">
+        <td colspan="4" style="border-right:none"></td>
+        <td class="rot">Valor total do pedido</td>
+        <td><span class="val"><span>R$</span><span>${fmtBR.format(total)}</span></span></td>
+        <td class="d-remover no-print"></td>
+      </tr>
 
-      <div class="f-obs"><div class="rot">OBSERVAÇÃO:</div><input data-l="observacao" value="${esc(L.observacao)}"></div>
+      <tr><td class="d-obs" colspan="6">
+        <span class="rotulo">OBSERVAÇÃO:</span> <input data-l="observacao" value="${esc(L.observacao)}" style="width:calc(100% - 90px);display:inline-block">
+      </td><td class="d-remover no-print"></td></tr>
 
-      <div class="f-assina">
-        ${L.assinaturas.map(blocoAssin).join("")}
-        ${Array(Math.max(0, 3 - L.assinaturas.length)).fill('<div class="f-ass-bloco"><div class="f-ass-rot">VISTO AUTORIZAÇÃO</div><div class="f-ass-espaco"></div><div class="f-ass-nome">&nbsp;</div><div class="f-ass-cargo">&nbsp;</div></div>').join("")}
-        <div class="f-ass-bloco"><div class="f-ass-rot">VISTO ALMOXARIFADO</div><div class="f-ass-espaco"></div><div class="f-ass-nome">&nbsp;</div><div class="f-ass-cargo">&nbsp;</div></div>
-      </div>
-      <div class="no-print" style="margin-top:6px;font-size:11px;color:#777">
-        Assinaturas sugeridas pela alçada de valor (até R$ 3.000 / até R$ 20.000 / acima).
-        ${L.assinaturasManuais ? '<button class="btn mini sec" id="btn-auto-ass">Voltar ao automático</button>' : "Troque nos seletores acima para fixar manualmente."}
-      </div>`;
+      <!-- assinaturas: A | B | C+D | E+F -->
+      <tr class="d-ass-rot">
+        <td>${esc(rotAss(0, ass[0]))}</td>
+        <td>VISTO AUTORIZAÇÃO</td>
+        <td colspan="2">VISTO AUTORIZAÇÃO</td>
+        <td colspan="2">VISTO ALMOXARIFADO</td><td class="d-remover no-print"></td>
+      </tr>
+      <tr class="d-ass-area">
+        ${celAss(ass[0], 0, 1)}
+        ${celAss(ass[1], 1, 1)}
+        ${celAss(ass[2], 2, 2)}
+        <td colspan="2">&nbsp;</td><td class="d-remover no-print"></td>
+      </tr>
+    </table></div>
+    <div class="no-print" style="margin-top:6px;font-size:11px;color:#777">
+      Assinaturas sugeridas pela alçada de valor (até R$ 3.000 / até R$ 20.000 / acima).
+      ${L.assinaturasManuais ? '<button class="btn mini sec" id="btn-auto-ass">Voltar ao automático</button>' : "Troque nos seletores para fixar manualmente."}
+    </div>`;
 
     /* eventos da folha */
     $$("#folha [data-l]").forEach(el => {
@@ -615,8 +637,10 @@ function telaEditor(app, id) {
     $$("#folha [data-ass]").forEach(el => {
       el.onchange = () => {
         const i = +el.dataset.ass;
-        if (el.value === "__remover") L.assinaturas.splice(i, 1);
-        else L.assinaturas[i] = el.value;
+        const novas = [...L.assinaturas];
+        if (el.value === "") novas.splice(i, 1);
+        else novas[i] = el.value;
+        L.assinaturas = novas.filter(Boolean);
         L.assinaturasManuais = true;
         salvar(); desenharFolha();
       };

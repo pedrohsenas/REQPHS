@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Requisições de Material — UIS3</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="stylesheet" href="style.css">
 <!-- SheetJS: leitura do .xlsx do banco de dados direto no navegador -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -13,7 +14,7 @@
 <!-- ===== Tela de senha (aparece antes de tudo) ===== -->
 <div id="tela-login" class="no-print" hidden>
   <form class="login-caixa" id="form-login">
-    <img class="logo-img" src="logo.png" alt="Lar" onerror="this.style.display='none'">
+    <img class="logo-img" src="favicon.svg" alt="Lar">
     <strong style="font-size:17px">Requisições UIS3</strong>
     <input type="password" id="senha" placeholder="Senha" autocomplete="current-password" autofocus>
     <p class="login-erro" id="login-erro"></p>
@@ -23,7 +24,7 @@
 
 <header id="topo" class="no-print">
   <div class="marca">
-    <img class="logo-img" src="logo.png" alt="" onerror="this.remove()">
+    <img class="logo-img" src="favicon.svg" alt="" onerror="this.remove()">
     <strong>Requisições UIS3</strong>
   </div>
   <nav>
