@@ -64,7 +64,10 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 const hoje = () => new Date().toISOString().slice(0, 10);
 const fmtBR = new Intl.NumberFormat("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const dinheiro = (v) => "R$ " + fmtBR.format(v || 0);
-const EMISSAO_MODELO = "12/02/26";   // data de emissão do FORMULÁRIO padrão (fixa, não muda por lista)
+const EMISSAO_MODELO = "12/02/26";   // data de emissão do FORMULÁRIO padrão RM (fixa, não muda por lista)
+const MM_NUMERO = "FO 185 1615-0014";
+const MM_EMISSAO = "13/02/25";       // emissão do formulário MM (fixa)
+const MM_NO = "00";
 const dataBR = (iso) => { if (!iso) return ""; const [a, m, d] = iso.split("-"); return `${d}/${m}/${a}`; };
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -461,7 +464,7 @@ function novaLista(titulo, projetoId, tipo) {
   };
 }
 const totalDa = (l) => l.tipo === "MM"
-  ? l.itens.reduce((s, i) => s + (i.qtdMax || 0) * (i.preco || 0), 0)     // MM: estimado pelo máximo
+  ? l.itens.reduce((s, i) => s + (i.qtdMin || 0) * (i.preco || 0), 0)     // MM: valor total = Qtde MÍN × valor un (padrão do FO)
   : l.itens.reduce((s, i) => s + (i.qtd || 0) * (i.preco || 0), 0);
 
 /* ---------------- roteamento ---------------- */
@@ -539,6 +542,9 @@ function telaInicio(app) {
     const t = prompt("Título do cadastro de Mínimo e Máximo:", "");
     if (t === null) return;
     const l = novaLista(t.trim() || "Novo cadastro MM", "", "MM");
+    l.numeroFO = MM_NUMERO;
+    l.descricao = "RELAÇÃO DE MÍNIMOS E MÁXIMOS PARA COMPRA";
+    l.setor = "";
     l.assinaturas = assinaturasMM(l);
     listas.push(l); salvarTudo(); nuvemSalvarLista(l);
     location.hash = "#/lista/" + l.id;
@@ -1081,95 +1087,123 @@ function telaEditor(app, id) {
     </div>`;
   }
 
-  /* ===== folha MM: CADASTRO DE MÍNIMO E MÁXIMO =====
-     Layout provisório na identidade oficial — será refinado com a planilha modelo. */
+  /* ===== folha MM: RELAÇÃO DE MÍNIMOS E MÁXIMOS PARA COMPRA =====
+     Réplica do FO 185 1615-0014. Colunas (proporções do modelo):
+     ESPECIFICAÇÃO 28% | UN 3,4% | MIN 6% | MAX 6% | CÓDIGO 6,5% | VALOR UN 7% | VALOR TOTAL 8,4% | JUSTIF. 34,7%
+     Valor total da linha = QTDE MIN × VALOR UN (regra do próprio formulário). */
   function folhaMM() {
     L.assinaturas = assinaturasMM(L);
     const total = totalDa(L);
-    $("#total-vivo").textContent = "Total (Qtd. Máx.): " + dinheiro(total);
+    $("#total-vivo").textContent = "Soma (Qtde Mín × Valor Un): " + dinheiro(total);
 
     const linhaItem = (i, idx) => `
       <tr class="d-item ${idx % 2 ? "zebra" : ""}">
-        <td class="d-cent">${esc(i.codigo)}</td>
         <td class="d-desc-item">${esc(i.descricao)}</td>
         <td class="d-cent">${esc(i.un)}</td>
         <td class="d-qtd"><input data-min="${idx}" value="${i.qtdMin ? fmtQtd(i.qtdMin) : ""}" inputmode="decimal" style="text-align:center"></td>
         <td class="d-qtd"><input data-max="${idx}" value="${i.qtdMax ? fmtQtd(i.qtdMax) : ""}" inputmode="decimal" style="text-align:center"></td>
+        <td class="d-cent">${esc(i.codigo)}</td>
         <td class="d-preco"><span>R$</span><input data-preco="${idx}" value="${i.preco ? fmtBR.format(i.preco) : ""}" inputmode="decimal" style="text-align:right"></td>
-        <td><input data-just="${idx}" value="${esc(i.justificativa || "")}" placeholder=""></td>
+        <td class="d-num">${(i.qtdMin && i.preco) ? "R$ " + fmtBR.format(i.qtdMin * i.preco) : ""}</td>
+        <td class="d-just"><input data-just="${idx}" value="${esc(i.justificativa || "")}" placeholder=""></td>
         <td class="d-remover no-print"><button data-remover="${idx}" title="Remover">✕</button></td>
       </tr>`;
     const vazias = Math.max(0, LINHAS_MIN - L.itens.length);
-    const linhaVazia = `<tr class="d-item d-vazia"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td><td class="d-remover no-print"></td></tr>`;
+    const linhaVazia = `<tr class="d-item d-vazia"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td class="d-remover no-print"></td></tr>`;
 
-    const ass = L.assinaturas;
-    const celAssFixa = (nome) => `
-      <td colspan="2">
-        ${nome ? `<div class="d-ass-nome">${esc(nome)}</div><div class="d-ass-cargo">${esc(cargoDe(nome))}</div>` : "&nbsp;"}
-      </td>`;
+    const ass = L.assinaturas;   // [solicitante, supervisor, gerente industrial]
+    const nomeCargo = (nome) => nome
+      ? `<div class="d-ass-nome">${esc(nome)}</div><div class="d-ass-cargo">${esc(cargoDe(nome))}</div>`
+      : "&nbsp;";
 
     $("#folha").innerHTML = `
     <table class="doc">
       <colgroup>
-        <col style="width:10%"><col style="width:27%"><col style="width:5%">
-        <col style="width:9%"><col style="width:9%"><col style="width:12%"><col style="width:28%"><col class="cX">
+        <col style="width:28%"><col style="width:3.4%"><col style="width:6%"><col style="width:6%">
+        <col style="width:6.5%"><col style="width:7%"><col style="width:8.4%"><col style="width:34.7%"><col class="cX">
       </colgroup>
+
+      <!-- cabeçalho: logo | título | bloco Número/Emissão/Revisão/No. -->
       <tr>
         <td class="d-logo"><img src="favicon.svg" alt="Lar" onerror="this.outerHTML='<b style=\'font-size:22px;color:#d5203b\'>Lar</b>'"></td>
-        <td class="d-titulo" colspan="4">CADASTRO DE MÍNIMO E MÁXIMO</td>
-        <td class="d-numero" colspan="1"><span class="rotulo">NÚMERO</span><input data-l="numeroFO" value="${esc(L.numeroFO || "")}"></td>
-        <td class="d-anexos"><img src="icone_pdf.png" alt="" onerror="this.remove()"><img src="icone_doc.png" alt="" onerror="this.remove()"></td>
-        <td class="d-remover no-print"></td>
-      </tr>
-      <tr class="d-rot-cent" style="font-weight:700">
-        <td class="d-rot-cent" colspan="2">SETOR</td>
-        <td class="d-rot-cent" colspan="3">SOLICITANTE</td>
-        <td class="d-rot-cent" colspan="2">DATA</td>
-        <td class="d-remover no-print"></td>
-      </tr>
-      <tr>
-        <td class="d-cent" colspan="2">
-          <select data-l="setor" style="width:100%;background:#fffbe6;border:none;text-align:center">
-            <option value="">— selecione —</option>
-            ${setores.map(s => `<option ${s.nome === L.setor ? "selected" : ""}>${esc(s.nome)}</option>`).join("")}
-          </select>
+        <td class="d-titulo" colspan="6">RELAÇÃO DE MÍNIMOS E MÁXIMOS PARA COMPRA</td>
+        <td style="padding:0">
+          <table class="mm-num">
+            <tr><td colspan="3" class="rot">Número</td></tr>
+            <tr><td colspan="3" class="d-cent d-valor"><input data-l="numeroFO" value="${esc(L.numeroFO || MM_NUMERO)}" style="text-align:center;font-weight:700"></td></tr>
+            <tr><td class="rot">Emissão</td><td class="rot">Revisão</td><td class="rot">No.</td></tr>
+            <tr><td class="d-cent d-valor">${MM_EMISSAO}</td><td class="d-cent d-valor"></td><td class="d-cent d-valor">${MM_NO}</td></tr>
+          </table>
         </td>
-        <td class="d-cent" colspan="3"><input data-l="solicitante" value="${esc(L.solicitante)}" style="text-align:center"></td>
-        <td class="d-cent" colspan="2"><input type="date" data-l="data" value="${esc(L.data)}" style="text-align:center"></td>
         <td class="d-remover no-print"></td>
       </tr>
+
+      <!-- linha solicitante / setor / data / nr o.s. -->
+      <tr>
+        <td colspan="8" style="padding:0">
+          <table class="mm-linha6">
+            <tr>
+              <td style="width:44%"><span class="rotulo">SOLICITANTE:</span> <input data-l="solicitante" value="${esc(L.solicitante)}" style="width:calc(100% - 92px);display:inline-block"></td>
+              <td style="width:6%" class="rotulo">SETOR:</td>
+              <td style="width:20%">
+                <select data-l="setor" style="width:100%;background:#fffbe6;border:none">
+                  <option value="">— selecione —</option>
+                  ${setores.map(s => `<option ${s.nome === L.setor ? "selected" : ""}>${esc(s.nome)}</option>`).join("")}
+                </select>
+              </td>
+              <td style="width:17%"><span class="rotulo">DATA:</span> <input type="date" data-l="data" value="${esc(L.data)}" style="width:calc(100% - 46px);display:inline-block"></td>
+              <td style="width:13%"><span class="rotulo">NR O.S.</span> <input data-l="nrOS" value="${esc(L.nrOS || "")}" style="width:calc(100% - 58px);display:inline-block"></td>
+            </tr>
+          </table>
+        </td>
+        <td class="d-remover no-print"></td>
+      </tr>
+
+      <!-- descrição fixa do processo -->
+      <tr>
+        <td class="d-descricao"><span class="rotulo">DESCRIÇÃO DO PRODUTO/PROCESSO À SER COMPRADO:</span></td>
+        <td colspan="7" class="d-cent d-valor"><input data-l="descricao" value="${esc(L.descricao || "RELAÇÃO DE MÍNIMOS E MÁXIMOS PARA COMPRA")}" style="text-align:center;font-weight:700"></td>
+        <td class="d-remover no-print"></td>
+      </tr>
+
+      <!-- tabela de itens -->
       <tr class="d-cab-itens">
-        <td>Código</td><td>Descrição</td><td>Un</td>
-        <td>Qtd. Mín.</td><td>Qtd. Máx.</td><td>Valor Unitário</td><td>Justificativa</td>
+        <td>ESPECIFICAÇÃO</td><td>UN</td><td>QTDE MIN</td><td>QTDE MAX</td>
+        <td>CÓDIGO</td><td>VALOR UN<br>(COMPRA/<br>ORÇAMENTO)</td><td>VALOR TOTAL</td><td>JUSTIFICATIVA/DESTINO</td>
         <td class="d-remover no-print"></td>
       </tr>
       ${L.itens.map(linhaItem).join("")}
       ${linhaVazia.repeat(vazias)}
-      <tr class="d-total">
-        <td colspan="5" style="border-right:none"></td>
-        <td class="rot" style="text-align:right">Total (Qtd. Máx.)</td>
-        <td><span class="val"><span>R$</span><span>${fmtBR.format(total)}</span></span></td>
-        <td class="d-remover no-print"></td>
-      </tr>
-      <tr><td class="d-obs" colspan="7">
+
+      <!-- observação -->
+      <tr><td class="d-obs" colspan="8">
         <span class="rotulo">OBSERVAÇÃO:</span> <input data-l="observacao" value="${esc(L.observacao || "")}" style="width:calc(100% - 90px);display:inline-block">
       </td><td class="d-remover no-print"></td></tr>
-      <tr class="d-ass-rot">
-        <td colspan="2">VISTO SOLICITANTE</td>
-        <td colspan="3">VISTO SUPERVISÃO</td>
-        <td colspan="2">VISTO GERÊNCIA INDUSTRIAL</td>
-        <td class="d-remover no-print"></td>
-      </tr>
-      <tr class="d-ass-area">
-        ${celAssFixa(ass[0])}
-        <td colspan="3">${ass[1] ? `<div class="d-ass-nome">${esc(ass[1])}</div><div class="d-ass-cargo">${esc(cargoDe(ass[1]))}</div>` : "&nbsp;"}</td>
-        ${celAssFixa(ass[2])}
+
+      <!-- vistos: solicitante | autorização | autorização | setor pedidos de compras -->
+      <tr>
+        <td colspan="8" style="padding:0">
+          <table class="mm-assina">
+            <tr class="d-ass-rot">
+              <td style="width:28%">VISTO SOLICITANTE</td>
+              <td style="width:28%">VISTO AUTORIZAÇÃO</td>
+              <td style="width:21%">VISTO AUTORIZAÇÃO</td>
+              <td style="width:23%">VISTO SETOR PEDIDOS DE COMPRAS</td>
+            </tr>
+            <tr class="d-ass-area">
+              <td>${nomeCargo(ass[0])}</td>
+              <td>${nomeCargo(ass[1])}</td>
+              <td>${nomeCargo(ass[2])}</td>
+              <td>&nbsp;</td>
+            </tr>
+          </table>
+        </td>
         <td class="d-remover no-print"></td>
       </tr>
     </table>
     <div class="no-print" style="margin-top:6px;font-size:11px;color:#777">
       Assinantes fixos do MM: solicitante + supervisor + gerente industrial (independe do valor).
-      Layout provisório — será ajustado com a planilha modelo oficial.
+      Valor total de cada linha segue o formulário oficial: Qtde Mín × Valor Un.
     </div>`;
   }
 

@@ -192,6 +192,18 @@ tr.d-ass-area td{height:26mm; vertical-align:bottom; text-align:center; padding-
 .d-ass-cargo{font-size:9.5px}
 .d-ass-troca select{width:100%; font-size:9px; margin-top:3px; background:#fffbe6; border:1px dashed var(--linha)}
 
+/* sub-tabelas do formulário MM (bloco número, linha do solicitante, vistos) */
+table.mm-num, table.mm-linha6, table.mm-assina{width:100%; border-collapse:collapse; table-layout:fixed}
+table.mm-num td, table.mm-linha6 td, table.mm-assina td{border:1px solid #000; padding:1px 4px; overflow:hidden}
+table.mm-num td.rot{background:#d9d9d9; font-weight:700; font-size:8.5px; text-align:center; padding:0 2px}
+table.mm-num tr:first-child td, table.mm-linha6 tr:first-child td, table.mm-assina tr:first-child td{border-top:none}
+table.mm-num td:first-child, table.mm-linha6 td:first-child, table.mm-assina td:first-child{border-left:none}
+table.mm-num td:last-child, table.mm-linha6 td:last-child, table.mm-assina td:last-child{border-right:none}
+table.mm-num tr:last-child td, table.mm-linha6 tr:last-child td, table.mm-assina tr:last-child td{border-bottom:none}
+table.mm-assina .d-ass-rot td{font-size:8.5px}
+td.d-just input{width:100%}
+tr.d-item td.d-just{padding:1px 3px}
+
 /* coluna do X de remover (fora do documento) */
 td.d-remover{border:none !important; background:none; text-align:center; padding:0}
 td.d-remover button{border:none; background:none; color:var(--vermelho); cursor:pointer; font-size:13px; line-height:1}
