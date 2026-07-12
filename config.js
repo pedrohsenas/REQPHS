@@ -7,6 +7,6 @@
    Deixe em branco para rodar 100% local.
    ============================================================ */
 window.CONFIG_NUVEM = {
-  url: "",       // ex.: "https://abcdefgh.supabase.co"  (do projeto NOVO)
-  anonKey: "",   // chave "anon public" do projeto NOVO (pode ficar no site; a segurança vem do login + RLS)
+  url: "https://oxhyvaqhbdtvmqvxlqdn.supabase.co/rest/v1/",
+  anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im94aHl2YXFoYmR0dm1xdnhscWRuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM4NzE0MDAsImV4cCI6MjA5OTQ0NzQwMH0.qYcF-EvTVLL-bP0gs8-fZckMsgqVxvUUykwTynvZbgA", 
 };
