@@ -818,20 +818,40 @@ function telaEditor(app, id) {
   };
   marcarSalvo(true);
 
-  $("#btn-imprimir").onclick = () => {
+  /* imprime um CLONE textual do documento: datas viram texto (sem ícone de calendário
+     cortando o ano), campos perdem o fundo amarelo e o PDF salvo é vetorial e pesquisável */
+  function imprimirDocumento() {
+    const clone = clonarFolhaParaPdf(false);
+    const area = document.createElement("div");
+    area.className = "area-impressao";
+    area.appendChild(clone);
+    document.body.appendChild(area);
+    document.body.classList.add("imprimindo-clone");
     const tituloAntes = document.title;
-    document.title = nomePdf();               // vira o nome do PDF na impressão
+    document.title = nomePdf();               // vira o nome do arquivo PDF
+    let limpo = false;
+    const limpar = () => {
+      if (limpo) return; limpo = true;
+      area.remove();
+      document.body.classList.remove("imprimindo-clone");
+      document.title = tituloAntes;
+      window.onafterprint = null;
+    };
+    window.onafterprint = limpar;
     window.print();
-    setTimeout(() => { document.title = tituloAntes; }, 500);
-  };
+    setTimeout(limpar, 3000);                 // reserva, caso o navegador não dispare o evento
+  }
+  $("#btn-imprimir").onclick = imprimirDocumento;
 
   /* ---------- PDF: clona a folha trocando campos por texto e pagina manualmente ---------- */
-  function clonarFolhaParaPdf() {
+  function clonarFolhaParaPdf(paraCaptura = true) {
     const orig = $(".folha");
     const clone = orig.cloneNode(true);
-    clone.classList.add("captura");          // bordas finas na captura (iguais ao modo impressão)
+    if (paraCaptura) {
+      clone.classList.add("captura");        // bordas finas na captura (o traço engrossava na foto)
+      clone.style.width = "1123px";
+    }
     clone.style.zoom = "1";
-    clone.style.width = "1123px";
     clone.style.boxShadow = "none";
     clone.style.padding = "0";
     clone.style.margin = "0";
@@ -861,58 +881,8 @@ function telaEditor(app, id) {
     return clone;
   }
 
-  async function gerarPdfBlob() {
-    const clone = clonarFolhaParaPdf();
-    const palco = document.createElement("div");
-    palco.style.cssText = "position:fixed;left:-12000px;top:0;width:1123px;background:#fff;z-index:-1";
-    palco.appendChild(clone);
-    document.body.appendChild(palco);
-    try {
-      await new Promise(r => setTimeout(r, 80));   // deixa as imagens assentarem
-      const canvas = await html2canvas(clone, { scale: 2.5, backgroundColor: "#ffffff", windowWidth: 1200, useCORS: true });
-      const { jsPDF } = window.jspdf;
-      const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "landscape" });
-      const margem = 6;
-      const pw = 297 - margem * 2;                              // largura útil da página
-      const ph = 210 - margem * 2;                              // altura útil
-      const pagPx = Math.floor(canvas.width * (ph / pw));       // altura de 1 página em px do canvas
-      let y = 0, primeira = true;
-      while (y < canvas.height) {
-        const fatia = Math.min(pagPx, canvas.height - y);
-        const c2 = document.createElement("canvas");
-        c2.width = canvas.width; c2.height = fatia;
-        c2.getContext("2d").drawImage(canvas, 0, y, canvas.width, fatia, 0, 0, canvas.width, fatia);
-        if (!primeira) pdf.addPage();
-        /* PNG (sem perdas): o JPEG criava halos cinza que engrossavam as linhas de 1px */
-        pdf.addImage(c2.toDataURL("image/png"), "PNG", margem, margem, pw, fatia * (pw / canvas.width));
-        primeira = false;
-        y += fatia;
-      }
-      return pdf.output("blob");
-    } finally {
-      palco.remove();
-    }
-  }
-
-  /* gera o ARQUIVO .pdf (funciona no celular) e abre o compartilhar do sistema */
-  $("#btn-pdf").onclick = async () => {
-    const btn = $("#btn-pdf");
-    btn.disabled = true; btn.textContent = "Gerando…";
-    try {
-      const nome = nomePdf() + ".pdf";
-      const blob = await gerarPdfBlob();
-      const arquivo = new File([blob], nome, { type: "application/pdf" });
-      if (navigator.canShare && navigator.canShare({ files: [arquivo] })) {
-        try { await navigator.share({ files: [arquivo], title: nomePdf() }); }
-        catch (e) { if (e.name !== "AbortError") baixarBlob(blob, nome); }
-      } else {
-        baixarBlob(blob, nome);
-      }
-    } catch (e) {
-      alert("Erro ao gerar o PDF: " + e.message);
-    }
-    btn.disabled = false; btn.textContent = "📤 PDF";
-  };
+  /* exportar PDF = impressão vetorial salva como PDF (texto pesquisável, arquivo leve) */
+  $("#btn-pdf").onclick = imprimirDocumento;
 
   /* ---------- zoom da folha (celular e PC) ---------- */
   let zoomManual = parseFloat(sessionStorage.getItem("rq.zoom") || "") || 0;   // 0 = ajustar à tela

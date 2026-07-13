@@ -384,10 +384,16 @@ body.modo-pdf .folha-rolagem{overflow:visible}
 body.modo-pdf .folha input, body.modo-pdf .folha textarea{background:transparent}
 body.modo-pdf tr.d-item.zebra input{background:transparent}
 
+/* clone textual usado na impressão/exportação */
+.area-impressao{display:none}
+
 /* ============================================================
    IMPRESSÃO — A4 paisagem, igual ao PDF oficial
    ============================================================ */
 @media print{
+  body.imprimindo-clone main#app, body.imprimindo-clone #topo, body.imprimindo-clone .modal{display:none !important}
+  body.imprimindo-clone .area-impressao{display:block}
+  .area-impressao .folha{width:auto !important; min-height:0; margin:0; padding:0; box-shadow:none; zoom:1 !important}
   @page{size:A4 landscape; margin:7mm}
   body{background:#fff}
   .no-print, #topo, .painel, .folha-barra, td.d-remover, .d-ass-troca, .btn, #tela-login{display:none !important}
