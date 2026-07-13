@@ -230,14 +230,18 @@ tr.d-ass-area td{height:26mm; vertical-align:bottom; text-align:center; padding-
 .d-ass-cargo{font-size:9.5px}
 .d-ass-troca select{width:100%; font-size:9px; margin-top:3px; background:#fffbe6; border:1px dashed var(--linha)}
 
-/* sub-tabelas do formulário MM (bloco número, linha do solicitante, vistos) */
-table.mm-num, table.mm-linha6, table.mm-assina{width:100%; border-collapse:collapse; table-layout:fixed}
-table.mm-num td, table.mm-linha6 td, table.mm-assina td{border:1px solid #000; padding:1px 4px; overflow:hidden}
-table.mm-num td.rot{background:#d9d9d9; font-weight:700; font-size:8.5px; text-align:center; padding:0 2px}
-table.mm-num tr:first-child td, table.mm-linha6 tr:first-child td, table.mm-assina tr:first-child td{border-top:none}
-table.mm-num td:first-child, table.mm-linha6 td:first-child, table.mm-assina td:first-child{border-left:none}
-table.mm-num td:last-child, table.mm-linha6 td:last-child, table.mm-assina td:last-child{border-right:none}
-table.mm-num tr:last-child td, table.mm-linha6 tr:last-child td, table.mm-assina tr:last-child td{border-bottom:none}
+/* sub-tabelas do formulário MM (topo, bloco número, linha do solicitante, vistos) */
+table.mm-topo, table.mm-num, table.mm-linha6, table.mm-assina{width:100%; border-collapse:collapse; table-layout:fixed}
+table.mm-topo td, table.mm-num td, table.mm-linha6 td, table.mm-assina td{border:1px solid #000; padding:1px 4px; overflow:hidden}
+table.mm-num td.rot{background:#fff; font-weight:700; font-size:8.5px; text-align:center; padding:0 2px}   /* referência: sem sombreado */
+table.mm-topo tr:first-child td, table.mm-num tr:first-child td, table.mm-linha6 tr:first-child td, table.mm-assina tr:first-child td{border-top:none}
+table.mm-topo td:first-child, table.mm-num td:first-child, table.mm-linha6 td:first-child, table.mm-assina td:first-child{border-left:none}
+table.mm-topo td:last-child, table.mm-num td:last-child, table.mm-linha6 td:last-child, table.mm-assina td:last-child{border-right:none}
+table.mm-topo tr:last-child td, table.mm-num tr:last-child td, table.mm-linha6 tr:last-child td, table.mm-assina tr:last-child td{border-bottom:none}
+/* coluna CÓDIGO do MM: laranja claro do formulário oficial */
+.folha.mm td.d-cod-mm{background:#f8cbad; -webkit-print-color-adjust:exact; print-color-adjust:exact}
+/* cabeçalho da tabela do MM sem sombreado (referência é branco) */
+.folha.mm tr.d-cab-itens td{background:#fff}
 table.mm-assina .d-ass-rot td{font-size:8.5px; text-align:left}          /* vistos do MM: à esquerda, como no original */
 table.mm-assina .d-ass-area td{text-align:left; vertical-align:bottom}
 table.mm-assina .d-ass-nome, table.mm-assina .d-ass-cargo{text-align:left}
@@ -322,14 +326,18 @@ td.d-remover button{border:none; background:none; color:var(--vermelho); cursor:
 .login-caixa .btn{width:100%; padding:11px; font-size:14px}
 .login-erro{color:var(--vermelho); font-size:12px; min-height:16px; margin:0}
 
-/* sub-tabelas do formulário MM (bloco número, linha do solicitante, vistos) */
-table.mm-num, table.mm-linha6, table.mm-assina{width:100%; border-collapse:collapse; table-layout:fixed}
-table.mm-num td, table.mm-linha6 td, table.mm-assina td{border:1px solid #000; padding:1px 4px; overflow:hidden}
-table.mm-num td.rot{background:#d9d9d9; font-weight:700; font-size:8.5px; text-align:center; padding:0 2px}
-table.mm-num tr:first-child td, table.mm-linha6 tr:first-child td, table.mm-assina tr:first-child td{border-top:none}
-table.mm-num td:first-child, table.mm-linha6 td:first-child, table.mm-assina td:first-child{border-left:none}
-table.mm-num td:last-child, table.mm-linha6 td:last-child, table.mm-assina td:last-child{border-right:none}
-table.mm-num tr:last-child td, table.mm-linha6 tr:last-child td, table.mm-assina tr:last-child td{border-bottom:none}
+/* sub-tabelas do formulário MM (topo, bloco número, linha do solicitante, vistos) */
+table.mm-topo, table.mm-num, table.mm-linha6, table.mm-assina{width:100%; border-collapse:collapse; table-layout:fixed}
+table.mm-topo td, table.mm-num td, table.mm-linha6 td, table.mm-assina td{border:1px solid #000; padding:1px 4px; overflow:hidden}
+table.mm-num td.rot{background:#fff; font-weight:700; font-size:8.5px; text-align:center; padding:0 2px}   /* referência: sem sombreado */
+table.mm-topo tr:first-child td, table.mm-num tr:first-child td, table.mm-linha6 tr:first-child td, table.mm-assina tr:first-child td{border-top:none}
+table.mm-topo td:first-child, table.mm-num td:first-child, table.mm-linha6 td:first-child, table.mm-assina td:first-child{border-left:none}
+table.mm-topo td:last-child, table.mm-num td:last-child, table.mm-linha6 td:last-child, table.mm-assina td:last-child{border-right:none}
+table.mm-topo tr:last-child td, table.mm-num tr:last-child td, table.mm-linha6 tr:last-child td, table.mm-assina tr:last-child td{border-bottom:none}
+/* coluna CÓDIGO do MM: laranja claro do formulário oficial */
+.folha.mm td.d-cod-mm{background:#f8cbad; -webkit-print-color-adjust:exact; print-color-adjust:exact}
+/* cabeçalho da tabela do MM sem sombreado (referência é branco) */
+.folha.mm tr.d-cab-itens td{background:#fff}
 table.mm-assina .d-ass-rot td{font-size:8.5px; text-align:left}
 table.mm-assina .d-ass-area td{text-align:left; vertical-align:bottom}
 table.mm-assina .d-ass-nome, table.mm-assina .d-ass-cargo{text-align:left}
@@ -368,7 +376,9 @@ body.modo-pdf tr.d-item.zebra input{background:transparent}
   .folha input, .folha textarea{background:transparent}
   .folha textarea{resize:none}
   tr.d-item.zebra input{background:transparent}
-  tr.d-vazia{display:none}                 /* o PDF oficial não tem linhas em branco */
+  tr.d-vazia{display:none}                 /* RM: o PDF oficial não tem linhas em branco */
+  .folha.mm tr.d-vazia{display:table-row}  /* MM: formulário de página cheia, vazias ficam */
+  .folha.mm td.d-cod-mm{background:#f8cbad !important}
   tr.d-item.zebra td{background:#d9d9d9 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact}
   tr.d-total td{background:#ffc000 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact}
 }

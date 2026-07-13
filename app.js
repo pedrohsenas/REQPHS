@@ -853,7 +853,7 @@ function telaEditor(app, id) {
       el.replaceWith(span);
     });
     clone.querySelectorAll(".no-print, td.d-remover, .d-ass-troca").forEach(el => el.remove());
-    clone.querySelectorAll("tr.d-vazia").forEach(el => el.remove());   // sem linhas em branco, como no oficial
+    if (!ehMM) clone.querySelectorAll("tr.d-vazia").forEach(el => el.remove());   // RM sem vazias; MM é formulário de página cheia
     clone.querySelectorAll("col.cX").forEach(c => { c.style.width = "0"; });
     return clone;
   }
@@ -1024,6 +1024,7 @@ function telaEditor(app, id) {
     const at = document.activeElement;
     const foco = (at && at.closest && at.closest("#folha") && at.dataset) ? { ...at.dataset } : null;
 
+    $("#folha").classList.toggle("mm", ehMM);
     if (ehMM) folhaMM(); else folhaRM();
     ligarEventosFolha();
     aplicarZoom();
@@ -1154,19 +1155,20 @@ function telaEditor(app, id) {
     $("#total-vivo").textContent = "Soma (Qtde Mín × Valor Un): " + dinheiro(total);
 
     const linhaItem = (i, idx) => `
-      <tr class="d-item ${idx % 2 ? "zebra" : ""}">
+      <tr class="d-item">
         <td class="d-desc-item">${esc(i.descricao)}</td>
         <td class="d-cent">${esc(i.un)}</td>
         <td class="d-qtd"><input data-min="${idx}" value="${i.qtdMin ? fmtQtd(i.qtdMin) : ""}" inputmode="decimal" style="text-align:center"></td>
         <td class="d-qtd"><input data-max="${idx}" value="${i.qtdMax ? fmtQtd(i.qtdMax) : ""}" inputmode="decimal" style="text-align:center"></td>
-        <td class="d-cent">${esc(i.codigo)}</td>
+        <td class="d-cent d-cod-mm">${esc(i.codigo)}</td>
         <td class="d-preco"><span>R$</span><input data-preco="${idx}" value="${i.preco ? fmtBR.format(i.preco) : ""}" inputmode="decimal" style="text-align:right"></td>
         <td>${(i.qtdMin && i.preco) ? `<span class="val-flex"><span>R$</span><span>${fmtBR.format(i.qtdMin * i.preco)}</span></span>` : ""}</td>
         <td class="d-just"><input data-just="${idx}" value="${esc(i.justificativa || "")}" placeholder=""></td>
         <td class="d-remover no-print"><button data-remover="${idx}" title="Remover">✕</button></td>
       </tr>`;
-    const vazias = Math.max(0, LINHAS_MIN - L.itens.length);
-    const linhaVazia = `<tr class="d-item d-vazia"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td class="d-remover no-print"></td></tr>`;
+    const LINHAS_FORM_MM = 32;                       // o formulário oficial tem 32 linhas (página cheia)
+    const vazias = Math.max(0, LINHAS_FORM_MM - L.itens.length);
+    const linhaVazia = `<tr class="d-item d-vazia"><td>&nbsp;</td><td></td><td></td><td></td><td class="d-cod-mm"></td><td></td><td></td><td></td><td class="d-remover no-print"></td></tr>`;
 
     const ass = L.assinaturas;   // [solicitante, supervisor, gerente industrial]
     const nomeCargo = (nome) => nome
@@ -1176,20 +1178,26 @@ function telaEditor(app, id) {
     $("#folha").innerHTML = `
     <table class="doc">
       <colgroup>
-        <col style="width:28%"><col style="width:3.4%"><col style="width:6%"><col style="width:6%">
-        <col style="width:6.5%"><col style="width:7%"><col style="width:8.4%"><col style="width:34.7%"><col class="cX">
+        <col style="width:27.9%"><col style="width:2.9%"><col style="width:6.1%"><col style="width:6.1%">
+        <col style="width:5.9%"><col style="width:6.7%"><col style="width:8.6%"><col style="width:35.8%"><col class="cX">
       </colgroup>
 
-      <!-- cabeçalho: logo | título | bloco Número/Emissão/Revisão/No. -->
+      <!-- cabeçalho: logo 27,9% | título 55,2% | bloco número 16,9% (proporções do PDF oficial) -->
       <tr>
-        <td class="d-logo"><img src="logo.png" alt="Lar" onerror="this.outerHTML='<b style=\'font-size:22px;color:#d5203b\'>Lar</b>'"></td>
-        <td class="d-titulo" colspan="6">RELAÇÃO DE MÍNIMOS E MÁXIMOS PARA COMPRA</td>
-        <td style="padding:0">
-          <table class="mm-num">
-            <tr><td colspan="3" class="rot">Número</td></tr>
-            <tr><td colspan="3" class="d-cent d-valor"><input data-l="numeroFO" value="${esc(L.numeroFO || MM_NUMERO)}" style="text-align:center;font-weight:700"></td></tr>
-            <tr><td class="rot">Emissão</td><td class="rot">Revisão</td><td class="rot">No.</td></tr>
-            <tr><td class="d-cent d-valor">${MM_EMISSAO}</td><td class="d-cent d-valor"></td><td class="d-cent d-valor">${MM_NO}</td></tr>
+        <td colspan="8" style="padding:0">
+          <table class="mm-topo">
+            <tr>
+              <td class="d-logo" style="width:27.9%"><img src="logo.png" alt="Lar" onerror="this.outerHTML='<b style=\'font-size:22px;color:#d5203b\'>Lar</b>'"></td>
+              <td class="d-titulo" style="width:55.2%;font-size:12.5px">RELAÇÃO DE MÍNIMOS E MÁXIMOS PARA COMPRA</td>
+              <td style="width:16.9%;padding:0">
+                <table class="mm-num">
+                  <tr><td colspan="3" class="rot">Número</td></tr>
+                  <tr><td colspan="3" class="d-cent d-valor"><input data-l="numeroFO" value="${esc(L.numeroFO || MM_NUMERO)}" style="text-align:center;font-weight:700"></td></tr>
+                  <tr><td class="rot" style="width:31%">Emissão</td><td class="rot" style="width:38%">Revisão</td><td class="rot" style="width:31%">No.</td></tr>
+                  <tr><td class="d-cent d-valor">${MM_EMISSAO}</td><td class="d-cent d-valor"></td><td class="d-cent d-valor">${MM_NO}</td></tr>
+                </table>
+              </td>
+            </tr>
           </table>
         </td>
         <td class="d-remover no-print"></td>
@@ -1200,16 +1208,16 @@ function telaEditor(app, id) {
         <td colspan="8" style="padding:0">
           <table class="mm-linha6">
             <tr>
-              <td style="width:44%"><span class="rotulo">SOLICITANTE:</span> <input data-l="solicitante" value="${esc(L.solicitante)}" style="width:calc(100% - 92px);display:inline-block"></td>
-              <td class="rotulo" style="width:6%;text-align:center">SETOR:</td>
-              <td style="width:20%" class="d-cent">
+              <td style="width:49.7%"><span class="rotulo">SOLICITANTE:</span> <input data-l="solicitante" value="${esc(L.solicitante)}" style="width:calc(100% - 92px);display:inline-block"></td>
+              <td class="rotulo" style="width:11.2%;text-align:center">SETOR:</td>
+              <td style="width:16.1%" class="d-cent">
                 <select data-l="setor" style="width:100%;background:#fffbe6;border:none;text-align:center;text-align-last:center">
                   <option value="">— selecione —</option>
                   ${setores.map(s => `<option ${s.nome === L.setor ? "selected" : ""}>${esc(s.nome)}</option>`).join("")}
                 </select>
               </td>
-              <td style="width:17%"><span class="rotulo">DATA:</span> <input type="date" data-l="data" value="${esc(L.data)}" style="width:calc(100% - 46px);display:inline-block"></td>
-              <td style="width:13%"><span class="rotulo">NR O.S.</span> <input data-l="nrOS" value="${esc(L.nrOS || "")}" style="width:calc(100% - 58px);display:inline-block"></td>
+              <td style="width:11%"><span class="rotulo">DATA:</span> <input type="date" data-l="data" value="${esc(L.data)}" style="width:calc(100% - 46px);display:inline-block"></td>
+              <td style="width:12%"><span class="rotulo">NR O.S.</span> <input data-l="nrOS" value="${esc(L.nrOS || "")}" style="width:calc(100% - 58px);display:inline-block"></td>
             </tr>
           </table>
         </td>
@@ -1231,6 +1239,13 @@ function telaEditor(app, id) {
       </tr>
       ${L.itens.map(linhaItem).join("")}
       ${linhaVazia.repeat(vazias)}
+      <tr class="d-total-mm">
+        <td colspan="5" style="border-right:none"></td>
+        <td class="d-cent" style="font-weight:700">TOTAL</td>
+        <td><span class="val-flex" style="font-weight:700"><span>R$</span><span>${fmtBR.format(total)}</span></span></td>
+        <td></td>
+        <td class="d-remover no-print"></td>
+      </tr>
 
       <!-- observação -->
       <tr><td class="d-obs" colspan="8">
