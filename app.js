@@ -866,7 +866,7 @@ function telaEditor(app, id) {
     document.body.appendChild(palco);
     try {
       await new Promise(r => setTimeout(r, 80));   // deixa as imagens assentarem
-      const canvas = await html2canvas(clone, { scale: 2, backgroundColor: "#ffffff", windowWidth: 1200, useCORS: true });
+      const canvas = await html2canvas(clone, { scale: 2.5, backgroundColor: "#ffffff", windowWidth: 1200, useCORS: true });
       const { jsPDF } = window.jspdf;
       const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "landscape" });
       const margem = 6;
@@ -880,7 +880,8 @@ function telaEditor(app, id) {
         c2.width = canvas.width; c2.height = fatia;
         c2.getContext("2d").drawImage(canvas, 0, y, canvas.width, fatia, 0, 0, canvas.width, fatia);
         if (!primeira) pdf.addPage();
-        pdf.addImage(c2.toDataURL("image/jpeg", 0.95), "JPEG", margem, margem, pw, fatia * (pw / canvas.width));
+        /* PNG (sem perdas): o JPEG criava halos cinza que engrossavam as linhas de 1px */
+        pdf.addImage(c2.toDataURL("image/png"), "PNG", margem, margem, pw, fatia * (pw / canvas.width));
         primeira = false;
         y += fatia;
       }
