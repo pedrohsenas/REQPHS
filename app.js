@@ -829,6 +829,7 @@ function telaEditor(app, id) {
   function clonarFolhaParaPdf() {
     const orig = $(".folha");
     const clone = orig.cloneNode(true);
+    clone.classList.add("captura");          // bordas finas na captura (iguais ao modo impressão)
     clone.style.zoom = "1";
     clone.style.width = "1123px";
     clone.style.boxShadow = "none";
@@ -845,8 +846,10 @@ function telaEditor(app, id) {
       const span = document.createElement("span");
       span.textContent = txt;
       const st = getComputedStyle(o);
-      if (o.closest("td.d-preco")) {   // R$ à esquerda, número à direita
+      if (o.closest("td.d-preco")) {          // R$ à esquerda, número à direita
         span.style.cssText = "display:inline-block;width:calc(100% - 18px);float:right;text-align:right";
+      } else if (o.closest(".campo-linha")) { // rótulo e valor na MESMA linha (DATA:, NR O.S., SOLICITANTE:)
+        span.style.cssText = `display:inline;white-space:nowrap;font-weight:${st.fontWeight}`;
       } else {
         span.style.cssText = `display:block;white-space:pre-wrap;overflow:hidden;text-align:${st.textAlign};font-weight:${st.fontWeight};min-height:11px`;
       }
@@ -1166,9 +1169,6 @@ function telaEditor(app, id) {
         <td class="d-just"><input data-just="${idx}" value="${esc(i.justificativa || "")}" placeholder=""></td>
         <td class="d-remover no-print"><button data-remover="${idx}" title="Remover">✕</button></td>
       </tr>`;
-    const LINHAS_FORM_MM = 32;                       // o formulário oficial tem 32 linhas (página cheia)
-    const vazias = Math.max(0, LINHAS_FORM_MM - L.itens.length);
-    const linhaVazia = `<tr class="d-item d-vazia"><td>&nbsp;</td><td></td><td></td><td></td><td class="d-cod-mm"></td><td></td><td></td><td></td><td class="d-remover no-print"></td></tr>`;
 
     const ass = L.assinaturas;   // [solicitante, supervisor, gerente industrial]
     const nomeCargo = (nome) => nome
@@ -1176,39 +1176,36 @@ function telaEditor(app, id) {
       : "&nbsp;";
 
     $("#folha").innerHTML = `
+    <!-- cabeçalho como bloco próprio, separado por um respiro em branco (como o original) -->
+    <table class="doc mm-cab">
+      <colgroup><col style="width:27.9%"><col style="width:55.2%"><col style="width:16.9%"></colgroup>
+      <tr>
+        <td class="d-logo" style="text-align:left"><img src="logo.png" alt="Lar" onerror="this.outerHTML='<b style=\'font-size:22px;color:#d5203b\'>Lar</b>'"></td>
+        <td class="d-titulo" style="font-size:12.5px">RELAÇÃO DE MÍNIMOS E MÁXIMOS PARA COMPRA</td>
+        <td style="padding:0">
+          <table class="mm-num">
+            <tr><td colspan="3" class="rot">Número</td></tr>
+            <tr><td colspan="3" class="d-cent d-valor"><input data-l="numeroFO" value="${esc(L.numeroFO || MM_NUMERO)}" style="text-align:center;font-weight:700"></td></tr>
+            <tr><td class="rot" style="width:31%">Emissão</td><td class="rot" style="width:38%">Revisão</td><td class="rot" style="width:31%">No.</td></tr>
+            <tr><td class="d-cent d-valor">${MM_EMISSAO}</td><td class="d-cent d-valor"></td><td class="d-cent d-valor">${MM_NO}</td></tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+    <div class="mm-respiro"></div>
+
     <table class="doc">
       <colgroup>
         <col style="width:27.9%"><col style="width:2.9%"><col style="width:6.1%"><col style="width:6.1%">
         <col style="width:5.9%"><col style="width:6.7%"><col style="width:8.6%"><col style="width:35.8%"><col class="cX">
       </colgroup>
 
-      <!-- cabeçalho: logo 27,9% | título 55,2% | bloco número 16,9% (proporções do PDF oficial) -->
-      <tr>
-        <td colspan="8" style="padding:0">
-          <table class="mm-topo">
-            <tr>
-              <td class="d-logo" style="width:27.9%"><img src="logo.png" alt="Lar" onerror="this.outerHTML='<b style=\'font-size:22px;color:#d5203b\'>Lar</b>'"></td>
-              <td class="d-titulo" style="width:55.2%;font-size:12.5px">RELAÇÃO DE MÍNIMOS E MÁXIMOS PARA COMPRA</td>
-              <td style="width:16.9%;padding:0">
-                <table class="mm-num">
-                  <tr><td colspan="3" class="rot">Número</td></tr>
-                  <tr><td colspan="3" class="d-cent d-valor"><input data-l="numeroFO" value="${esc(L.numeroFO || MM_NUMERO)}" style="text-align:center;font-weight:700"></td></tr>
-                  <tr><td class="rot" style="width:31%">Emissão</td><td class="rot" style="width:38%">Revisão</td><td class="rot" style="width:31%">No.</td></tr>
-                  <tr><td class="d-cent d-valor">${MM_EMISSAO}</td><td class="d-cent d-valor"></td><td class="d-cent d-valor">${MM_NO}</td></tr>
-                </table>
-              </td>
-            </tr>
-          </table>
-        </td>
-        <td class="d-remover no-print"></td>
-      </tr>
-
       <!-- linha solicitante / setor / data / nr o.s. -->
       <tr>
         <td colspan="8" style="padding:0">
           <table class="mm-linha6">
             <tr>
-              <td style="width:49.7%"><span class="rotulo">SOLICITANTE:</span> <input data-l="solicitante" value="${esc(L.solicitante)}" style="width:calc(100% - 92px);display:inline-block"></td>
+              <td style="width:49.7%" class="campo-linha"><span class="rotulo">SOLICITANTE:</span> <input data-l="solicitante" value="${esc(L.solicitante)}" style="width:calc(100% - 92px);display:inline-block"></td>
               <td class="rotulo" style="width:11.2%;text-align:center">SETOR:</td>
               <td style="width:16.1%" class="d-cent">
                 <select data-l="setor" style="width:100%;background:#fffbe6;border:none;text-align:center;text-align-last:center">
@@ -1216,8 +1213,8 @@ function telaEditor(app, id) {
                   ${setores.map(s => `<option ${s.nome === L.setor ? "selected" : ""}>${esc(s.nome)}</option>`).join("")}
                 </select>
               </td>
-              <td style="width:11%"><span class="rotulo">DATA:</span> <input type="date" data-l="data" value="${esc(L.data)}" style="width:calc(100% - 46px);display:inline-block"></td>
-              <td style="width:12%"><span class="rotulo">NR O.S.</span> <input data-l="nrOS" value="${esc(L.nrOS || "")}" style="width:calc(100% - 58px);display:inline-block"></td>
+              <td style="width:11%" class="campo-linha"><span class="rotulo">DATA:</span><input type="date" data-l="data" value="${esc(L.data)}"></td>
+              <td style="width:12%" class="campo-linha"><span class="rotulo">NR O.S.</span><input data-l="nrOS" value="${esc(L.nrOS || "")}"></td>
             </tr>
           </table>
         </td>
@@ -1238,7 +1235,6 @@ function telaEditor(app, id) {
         <td class="d-remover no-print"></td>
       </tr>
       ${L.itens.map(linhaItem).join("")}
-      ${linhaVazia.repeat(vazias)}
       <tr class="d-total-mm">
         <td colspan="5" style="border-right:none"></td>
         <td class="d-cent" style="font-weight:700">TOTAL</td>

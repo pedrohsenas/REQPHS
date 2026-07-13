@@ -238,6 +238,17 @@ table.mm-topo tr:first-child td, table.mm-num tr:first-child td, table.mm-linha6
 table.mm-topo td:first-child, table.mm-num td:first-child, table.mm-linha6 td:first-child, table.mm-assina td:first-child{border-left:none}
 table.mm-topo td:last-child, table.mm-num td:last-child, table.mm-linha6 td:last-child, table.mm-assina td:last-child{border-right:none}
 table.mm-topo tr:last-child td, table.mm-num tr:last-child td, table.mm-linha6 tr:last-child td, table.mm-assina tr:last-child td{border-bottom:none}
+/* respiro entre o cabeçalho e o corpo do MM (linha mesclada em branco do original) */
+.mm-respiro{height:9px}
+/* rótulo e valor na mesma linha (DATA:, NR O.S., SOLICITANTE:) */
+.folha td.campo-linha{white-space:nowrap}
+.folha td.campo-linha .rotulo{margin-right:3px}
+.folha td.campo-linha input{display:inline-block; width:auto; max-width:calc(100% - 48px); vertical-align:middle}
+/* captura do PDF: linhas finas como no modo impressão (o traço de 1px engrossava na foto) */
+.folha.captura table.doc{border-width:1.2px}
+.folha.captura table.doc td{border-width:0.5px}
+.folha.captura table.mm-topo td, .folha.captura table.mm-num td,
+.folha.captura table.mm-linha6 td, .folha.captura table.mm-assina td{border-width:0.5px}
 /* coluna CÓDIGO do MM: laranja claro do formulário oficial */
 .folha.mm td.d-cod-mm{background:#f8cbad; -webkit-print-color-adjust:exact; print-color-adjust:exact}
 /* cabeçalho da tabela do MM sem sombreado (referência é branco) */
@@ -334,6 +345,17 @@ table.mm-topo tr:first-child td, table.mm-num tr:first-child td, table.mm-linha6
 table.mm-topo td:first-child, table.mm-num td:first-child, table.mm-linha6 td:first-child, table.mm-assina td:first-child{border-left:none}
 table.mm-topo td:last-child, table.mm-num td:last-child, table.mm-linha6 td:last-child, table.mm-assina td:last-child{border-right:none}
 table.mm-topo tr:last-child td, table.mm-num tr:last-child td, table.mm-linha6 tr:last-child td, table.mm-assina tr:last-child td{border-bottom:none}
+/* respiro entre o cabeçalho e o corpo do MM (linha mesclada em branco do original) */
+.mm-respiro{height:9px}
+/* rótulo e valor na mesma linha (DATA:, NR O.S., SOLICITANTE:) */
+.folha td.campo-linha{white-space:nowrap}
+.folha td.campo-linha .rotulo{margin-right:3px}
+.folha td.campo-linha input{display:inline-block; width:auto; max-width:calc(100% - 48px); vertical-align:middle}
+/* captura do PDF: linhas finas como no modo impressão (o traço de 1px engrossava na foto) */
+.folha.captura table.doc{border-width:1.2px}
+.folha.captura table.doc td{border-width:0.5px}
+.folha.captura table.mm-topo td, .folha.captura table.mm-num td,
+.folha.captura table.mm-linha6 td, .folha.captura table.mm-assina td{border-width:0.5px}
 /* coluna CÓDIGO do MM: laranja claro do formulário oficial */
 .folha.mm td.d-cod-mm{background:#f8cbad; -webkit-print-color-adjust:exact; print-color-adjust:exact}
 /* cabeçalho da tabela do MM sem sombreado (referência é branco) */
