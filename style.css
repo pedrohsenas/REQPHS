@@ -191,6 +191,7 @@ col.cX{width:7mm}
 /* cabeçalho */
 td.d-logo{text-align:center; padding:4px}
 td.d-logo img{height:13mm; max-width:90%; object-fit:contain; display:block; margin:0 auto}
+.folha.mm td.d-logo img{margin:0}   /* MM: logo à esquerda (o margin auto centralizava e anulava o text-align) */
 td.d-titulo{font-size:17px; font-weight:700; text-align:center}
 td.d-numero{font-weight:700; vertical-align:top; font-size:10px}
 td.d-numero .rotulo{display:block}
