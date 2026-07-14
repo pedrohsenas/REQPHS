@@ -31,7 +31,7 @@ const P = {
 
 /* Regras de alçada de assinatura por valor total */
 function assinaturasPorValor(total) {
-  if (total <= 3000)  return [P.pedro, P.alex];
+  if (total <= 5000)  return [P.pedro, P.alex];
   if (total <= 20000) return [P.pedro, P.alex, P.jaisson];
   return [P.alex, P.jaisson, P.ademilson];
 }
@@ -475,6 +475,7 @@ function render() {
   if (h.startsWith("#/lista/"))       telaEditor(app, h.slice(8));
   else if (h.startsWith("#/projeto/")) telaProjeto(app, h.slice(10));
   else if (h === "#/cadastros")        telaCadastros(app);
+  else if (h === "#/arquivados")       telaArquivados(app);
   else telaInicio(app);
 }
 
@@ -482,8 +483,24 @@ function render() {
    TELA: INÍCIO — projetos e listas
    ============================================================ */
 function telaInicio(app) {
-  const rms = [...listas].reverse().filter(l => (l.tipo || "RM") !== "MM");
-  const mms = [...listas].reverse().filter(l => l.tipo === "MM");
+  /* filtro por dono: 'meu' (padrão), 'todos' ou 'p:Nome da Pessoa' */
+  let filtro = localStorage.getItem("rq.filtroDono") || "meu";
+  if (filtro === "meu" && !usuarioAtual) filtro = "todos";   // sem vínculo de login, mostra tudo
+  const donoOk = (autor) => {
+    if (!autor) return true;                                  // registros antigos sem autor aparecem sempre
+    if (filtro === "todos") return true;
+    if (filtro === "meu") return usuarioAtual && autor === usuarioAtual.nome;
+    return autor === filtro.slice(2);
+  };
+  const autores = [...new Set([
+    ...pessoas.map(p => p.nome),
+    ...listas.map(l => l.autor).filter(Boolean),
+    ...projetos.map(p => p.autor).filter(Boolean),
+  ])].sort();
+
+  const ativos = projetos.filter(p => p.status !== "arquivado" && donoOk(p.autor));
+  const rms = [...listas].reverse().filter(l => (l.tipo || "RM") !== "MM" && donoOk(l.autor));
+  const mms = [...listas].reverse().filter(l => l.tipo === "MM" && donoOk(l.autor));
   const cartaoLista = (l) => {
     const proj = projetos.find(p => p.id === l.projetoId);
     return `<div class="cartao ${l.status === "concluida" ? "concluida" : ""}">
@@ -501,11 +518,12 @@ function telaInicio(app) {
   const cartaoProjeto = (p) => {
     const ls = listas.filter(l => l.projetoId === p.id);
     const tot = ls.reduce((s, l) => s + totalDa(l), 0);
-    return `<div class="cartao projeto">
+    return `<div class="cartao projeto ${p.status === "arquivado" ? "concluida" : ""}">
       <h3><a href="#/projeto/${p.id}">${esc(p.nome)}</a></h3>
-      <div class="sub">${ls.length} lista(s)</div>
+      <div class="sub">${ls.length} lista(s)${p.autor ? ` · por ${esc(p.autor)}` : ""}${p.status === "arquivado" ? ' · <span class="etiqueta ok">📦 arquivado</span>' : ""}</div>
       <div class="rodape"><span class="valor">${dinheiro(tot)}</span><span class="espacador"></span>
         <a class="btn mini sec" href="#/projeto/${p.id}">Resumo</a>
+        <button class="btn mini sec" data-arquivar-projeto="${p.id}">${p.status === "arquivado" ? "Reativar" : "Arquivar"}</button>
         <button class="btn mini perigo" data-excluir-projeto="${p.id}">Excluir</button></div>
     </div>`;
   };
@@ -513,11 +531,16 @@ function telaInicio(app) {
   app.innerHTML = `
     <div class="pagina-titulo">
       <h1>Listas de materiais</h1><span class="espacador"></span>
+      <select id="filtro-dono" title="De quem mostrar os cartões">
+        <option value="meu" ${filtro === "meu" ? "selected" : ""}>👤 Meus</option>
+        <option value="todos" ${filtro === "todos" ? "selected" : ""}>👥 Todos</option>
+        ${autores.map(a => `<option value="p:${esc(a)}" ${filtro === "p:" + a ? "selected" : ""}>${esc(a)}</option>`).join("")}
+      </select>
       <button class="btn" id="btn-nova-lista">+ Requisição (RM)</button>
       <button class="btn sec" id="btn-nova-mm">+ Cadastro Mín/Máx (MM)</button>
       <button class="btn sec" id="btn-novo-projeto">+ Novo projeto</button>
     </div>
-    ${projetos.length ? `<div class="secao-titulo">Projetos</div><div class="grade-cartoes">${projetos.map(cartaoProjeto).join("")}</div>` : ""}
+    ${ativos.length ? `<div class="secao-titulo">Projetos em andamento</div><div class="grade-cartoes">${ativos.map(cartaoProjeto).join("")}</div>` : ""}
     <div class="secao-titulo">Requisições (RM)</div>
     ${rms.length
       ? `<div class="grade-cartoes">${rms.map(cartaoLista).join("")}</div>`
@@ -542,6 +565,7 @@ function telaInicio(app) {
     listas.push(l); salvarTudo(); nuvemSalvarLista(l);
     location.hash = "#/lista/" + l.id;
   };
+  $("#filtro-dono").onchange = (e) => { localStorage.setItem("rq.filtroDono", e.target.value); render(); };
   $("#btn-nova-lista").onclick = criarLista;
   const b2 = $("#btn-nova-lista-2"); if (b2) b2.onclick = criarLista;
   $("#btn-nova-mm").onclick = () => {
@@ -558,7 +582,7 @@ function telaInicio(app) {
   $("#btn-novo-projeto").onclick = () => {
     const nome = prompt("Nome do projeto:");
     if (!nome) return;
-    const p = { id: uid(), nome: nome.trim() };
+    const p = { id: uid(), nome: nome.trim(), status: "andamento", autor: (usuarioAtual && usuarioAtual.nome) || emailSessao || "" };
     projetos.push(p); salvarTudo(); nuvemSalvarProjeto(p); render();
   };
   app.onclick = (e) => {
@@ -572,6 +596,11 @@ function telaInicio(app) {
       const c = JSON.parse(JSON.stringify(o));
       c.id = uid(); c.titulo = o.titulo + " (cópia)"; c.criadoEm = hoje();
       listas.push(c); salvarTudo(); nuvemSalvarLista(c); render();
+    }
+    if (d.arquivarProjeto) {
+      const p = projetos.find(x => x.id === d.arquivarProjeto);
+      p.status = p.status === "arquivado" ? "andamento" : "arquivado";
+      salvarTudo(); nuvemSalvarProjeto(p); render();
     }
     if (d.excluirProjeto) {
       const p = projetos.find(x => x.id === d.excluirProjeto);
@@ -608,6 +637,7 @@ function telaProjeto(app, id) {
     <div class="pagina-titulo">
       <h1>Projeto: ${esc(p.nome)}</h1><span class="espacador"></span>
       <button class="btn sec" id="btn-renomear">Renomear</button>
+      <button class="btn sec" id="btn-arquivar">${p.status === "arquivado" ? "Reativar projeto" : "📦 Arquivar projeto"}</button>
       <a class="btn" href="#/" onclick="return criarListaNoProjeto('${p.id}')">+ Lista neste projeto</a>
     </div>
     <div class="resumo-blocos">
@@ -630,6 +660,10 @@ function telaProjeto(app, id) {
     const n = prompt("Novo nome do projeto:", p.nome);
     if (n) { p.nome = n.trim(); salvarTudo(); nuvemSalvarProjeto(p); render(); }
   };
+  $("#btn-arquivar").onclick = () => {
+    p.status = p.status === "arquivado" ? "andamento" : "arquivado";
+    salvarTudo(); nuvemSalvarProjeto(p); render();
+  };
   window.criarListaNoProjeto = (pid) => {
     const t = prompt("Título da lista:", "");
     if (t === null) return false;
@@ -637,6 +671,39 @@ function telaProjeto(app, id) {
     listas.push(l); salvarTudo(); nuvemSalvarLista(l);
     location.hash = "#/lista/" + l.id;
     return false;
+  };
+}
+
+/* ============================================================
+   TELA: PROJETOS ARQUIVADOS (concluídos)
+   ============================================================ */
+function telaArquivados(app) {
+  const arquivados = projetos.filter(p => p.status === "arquivado");
+  const cartao = (p) => {
+    const ls = listas.filter(l => l.projetoId === p.id);
+    const tot = ls.reduce((s, l) => s + totalDa(l), 0);
+    return `<div class="cartao projeto concluida">
+      <h3><a href="#/projeto/${p.id}">${esc(p.nome)}</a></h3>
+      <div class="sub">${ls.length} lista(s)${p.autor ? ` · por ${esc(p.autor)}` : ""}</div>
+      <div class="rodape"><span class="valor">${dinheiro(tot)}</span><span class="espacador"></span>
+        <a class="btn mini sec" href="#/projeto/${p.id}">Resumo</a>
+        <button class="btn mini" data-reativar="${p.id}">Reativar</button></div>
+    </div>`;
+  };
+  app.innerHTML = `
+    <div class="pagina-titulo">
+      <h1>📦 Projetos arquivados</h1><span class="espacador"></span>
+      <a class="btn sec" href="#/">← Voltar</a>
+    </div>
+    ${arquivados.length
+      ? `<div class="grade-cartoes">${arquivados.map(cartao).join("")}</div>`
+      : `<div class="vazio">Nenhum projeto arquivado.<br>Conclua um projeto usando o botão “Arquivar” no cartão ou no resumo dele.</div>`}`;
+  app.onclick = (e) => {
+    const id = e.target.dataset && e.target.dataset.reativar;
+    if (!id) return;
+    const p = projetos.find(x => x.id === id);
+    p.status = "andamento";
+    salvarTudo(); nuvemSalvarProjeto(p); render();
   };
 }
 
@@ -752,7 +819,8 @@ function telaEditor(app, id) {
       <input type="text" id="ed-titulo" class="be-titulo" value="${esc(L.titulo)}" placeholder="Título">
       <select id="ed-projeto" title="Projeto">
         <option value="">— sem projeto —</option>
-        ${projetos.map(p => `<option value="${p.id}" ${p.id === L.projetoId ? "selected" : ""}>${esc(p.nome)}</option>`).join("")}
+        ${projetos.filter(p => p.status !== "arquivado" || p.id === L.projetoId)
+          .map(p => `<option value="${p.id}" ${p.id === L.projetoId ? "selected" : ""}>${esc(p.nome)}${p.status === "arquivado" ? " (arquivado)" : ""}</option>`).join("")}
       </select>
     </div>
     <div class="be-linha">
@@ -1113,7 +1181,7 @@ function telaEditor(app, id) {
       </tr>
     </table>
     <div class="no-print" style="margin-top:6px;font-size:11px;color:#777">
-      Assinaturas sugeridas pela alçada de valor (até R$ 3.000 / até R$ 20.000 / acima).
+      Assinaturas sugeridas pela alçada de valor (até R$ 5.000 / até R$ 20.000 / acima).
       ${L.assinaturasManuais ? '<button class="btn mini sec" id="btn-auto-ass">Voltar ao automático</button>' : "Troque nos seletores para fixar manualmente."}
     </div>`;
   }
@@ -1123,7 +1191,7 @@ function telaEditor(app, id) {
      ESPECIFICAÇÃO 28% | UN 3,4% | MIN 6% | MAX 6% | CÓDIGO 6,5% | VALOR UN 7% | VALOR TOTAL 8,4% | JUSTIF. 34,7%
      Valor total da linha = QTDE MIN × VALOR UN (regra do próprio formulário). */
   function folhaMM() {
-    L.assinaturas = assinaturasMM(L);
+    if (!L.assinaturasManuais) L.assinaturas = assinaturasMM(L);
     const total = totalDa(L);
     $("#total-vivo").textContent = "Soma (Qtde Mín × Valor Un): " + dinheiro(total);
 
@@ -1140,10 +1208,17 @@ function telaEditor(app, id) {
         <td class="d-remover no-print"><button data-remover="${idx}" title="Remover">✕</button></td>
       </tr>`;
 
-    const ass = L.assinaturas;   // [solicitante, supervisor, gerente industrial]
+    const ass = [L.assinaturas[0] || "", L.assinaturas[1] || "", L.assinaturas[2] || ""];
     const nomeCargo = (nome) => nome
       ? `<div class="d-ass-nome">${esc(nome)}</div><div class="d-ass-cargo">${esc(cargoDe(nome))}</div>`
       : "&nbsp;";
+    const seletorAss = (i) => `
+      <div class="d-ass-troca no-print">
+        <select data-ass="${i}">
+          <option value="" ${!ass[i] ? "selected" : ""}>(sem assinatura)</option>
+          ${pessoas.map(p => `<option ${p.nome === ass[i] ? "selected" : ""}>${esc(p.nome)}</option>`).join("")}
+        </select>
+      </div>`;
 
     $("#folha").innerHTML = `
     <!-- cabeçalho como bloco próprio, separado por um respiro em branco (como o original) -->
@@ -1229,9 +1304,9 @@ function telaEditor(app, id) {
               <td style="width:23%">VISTO SETOR PEDIDOS DE COMPRAS</td>
             </tr>
             <tr class="d-ass-area">
-              <td>${nomeCargo(ass[0])}</td>
-              <td>${nomeCargo(ass[1])}</td>
-              <td>${nomeCargo(ass[2])}</td>
+              <td>${nomeCargo(ass[0])}${seletorAss(0)}</td>
+              <td>${nomeCargo(ass[1])}${seletorAss(1)}</td>
+              <td>${nomeCargo(ass[2])}${seletorAss(2)}</td>
               <td>&nbsp;</td>
             </tr>
           </table>
@@ -1240,7 +1315,8 @@ function telaEditor(app, id) {
       </tr>
     </table>
     <div class="no-print" style="margin-top:6px;font-size:11px;color:#777">
-      Assinantes fixos do MM: solicitante + supervisor + gerente industrial (independe do valor).
+      Assinantes padrão do MM: solicitante + supervisor + gerente industrial (independe do valor).
+      ${L.assinaturasManuais ? '<button class="btn mini sec" id="btn-auto-ass">Voltar ao padrão</button>' : "Troque nos seletores se necessário."}
       Valor total de cada linha segue o formulário oficial: Qtde Mín × Valor Un.
     </div>`;
   }
