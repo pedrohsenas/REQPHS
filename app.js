@@ -996,7 +996,7 @@ function telaEditor(app, id) {
       lupaAtiva = r.c;                                       // marca este item como "em análise"
       sessionStorage.setItem("rq.lupa", lupaAtiva);
       desenharResultados();
-      window.open("https://www.google.com/search?q=" + encodeURIComponent('"' + r.d + '"'), "_blank");
+      window.open("https://www.google.com/search?q=" + encodeURIComponent(r.d), "_blank");
     });
   };
   let timer = null;
