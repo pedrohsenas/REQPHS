@@ -275,6 +275,8 @@ td.d-remover button{border:none; background:none; color:var(--vermelho); cursor:
 .be-linha{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
 .be-tipo{background:var(--grafite); color:#fff; font-weight:800; font-size:12px; border-radius:var(--raio-mini); padding:7px 10px; letter-spacing:.05em}
 .be-titulo{flex:1; min-width:200px; font-size:16px; font-weight:700}
+.be-autor{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--cinza); white-space:nowrap}
+.be-autor select{font-size:12px; padding:6px 8px; max-width:220px}
 #ed-projeto{min-width:170px}
 #btn-salvar.salvo{color:var(--verde); border-color:var(--verde); background:var(--verde-suave)}
 .be-notas summary{cursor:pointer; font-size:12px; color:var(--cinza); user-select:none}

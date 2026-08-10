@@ -29,11 +29,14 @@ const P = {
   ademilson: "Ademilson Freire da Silva",
 };
 
-/* Regras de alçada de assinatura por valor total */
-function assinaturasPorValor(total) {
-  if (total <= 5000)  return [P.pedro, P.alex];
-  if (total <= 20000) return [P.pedro, P.alex, P.jaisson];
-  return [P.alex, P.jaisson, P.ademilson];
+/* Regras de alçada de assinatura por valor total.
+   O 1º visto é sempre o SOLICITANTE da própria requisição (quem criou);
+   acima de R$ 30 mil o documento sobe para as gerências. */
+function assinaturasPorValor(total, solicitante) {
+  const quem = solicitante || P.pedro;
+  if (total <= 5000)  return [quem, P.alex];                  // supervisor
+  if (total <= 30000) return [quem, P.alex, P.jaisson];       // + gerente industrial
+  return [P.alex, P.jaisson, P.ademilson];                    // gerente corporativo
 }
 const cargoDe = (nome) => ((pessoas || PESSOAS_PADRAO).find(p => p.nome === nome) || {}).cargo || "";
 const acharPorCargo = (trecho) => {
@@ -445,6 +448,7 @@ function buscar(consulta, ignorarEspacos, limite = 60) {
 
 /* ---------------- modelos de dados ---------------- */
 function novaLista(titulo, projetoId, tipo) {
+  const eu = (usuarioAtual && usuarioAtual.nome) || P.pedro;
   return {
     id: uid(), tipo: tipo || "RM",                    // RM = requisição de material · MM = cadastro mín/máx
     status: "andamento",                              // andamento | concluida
@@ -455,13 +459,18 @@ function novaLista(titulo, projetoId, tipo) {
     local: "185 - UIS 3", areaSetor: "PROJETOS",
     emissao: hoje(), revisao: "0", numero: "",
     descricao: "", data: hoje(),
-    solicitante: (usuarioAtual && usuarioAtual.nome) || P.pedro, setor: "9313", projetoNum: "", nrOS: "",
+    solicitante: eu, setor: "9313", projetoNum: "", nrOS: "",
     observacao: "COMUNICAR O SOLICITANTE QUANDO DA CHEGADA.",
     itens: [],                       // {codigo, descricao, un, qtd, preco}
-    assinaturas: assinaturasPorValor(0),
+    assinaturas: [],
     assinaturasManuais: false,
     criadoEm: hoje(),
   };
+}
+/* completa a lista recém-criada com as assinaturas do próprio criador */
+function prepararAssinaturas(l) {
+  l.assinaturas = l.tipo === "MM" ? assinaturasMM(l) : assinaturasPorValor(0, l.solicitante);
+  return l;
 }
 const totalDa = (l) => l.tipo === "MM"
   ? l.itens.reduce((s, i) => s + (i.qtdMin || 0) * (i.preco || 0), 0)     // MM: valor total = Qtde MÍN × valor un (padrão do FO)
@@ -560,7 +569,7 @@ function telaInicio(app) {
       const r = prompt("Vincular a um projeto? Digite o número (ou deixe vazio):\n" + nomes, "");
       if (r) { const p = projetos[parseInt(r, 10) - 1]; if (p) projetoId = p.id; }
     }
-    const l = novaLista(titulo.trim() || "Nova requisição", projetoId);
+    const l = prepararAssinaturas(novaLista(titulo.trim() || "Nova requisição", projetoId));
     l.descricao = "";
     listas.push(l); salvarTudo(); nuvemSalvarLista(l);
     location.hash = "#/lista/" + l.id;
@@ -575,7 +584,7 @@ function telaInicio(app) {
     l.numeroFO = MM_NUMERO;
     l.descricao = "RELAÇÃO DE MÍNIMOS E MÁXIMOS PARA COMPRA";
     l.setor = "";
-    l.assinaturas = assinaturasMM(l);
+    prepararAssinaturas(l);
     listas.push(l); salvarTudo(); nuvemSalvarLista(l);
     location.hash = "#/lista/" + l.id;
   };
@@ -667,7 +676,7 @@ function telaProjeto(app, id) {
   window.criarListaNoProjeto = (pid) => {
     const t = prompt("Título da lista:", "");
     if (t === null) return false;
-    const l = novaLista(t.trim() || "Nova requisição", pid);
+    const l = prepararAssinaturas(novaLista(t.trim() || "Nova requisição", pid));
     listas.push(l); salvarTudo(); nuvemSalvarLista(l);
     location.hash = "#/lista/" + l.id;
     return false;
@@ -824,6 +833,13 @@ function telaEditor(app, id) {
       </select>
     </div>
     <div class="be-linha">
+      <label class="be-autor" title="Quem criou/responde por esta lista">Autor:
+        <select id="ed-autor">
+          <option value="" ${!L.autor ? "selected" : ""}>— não definido —</option>
+          ${[...new Set([...pessoas.map(p => p.nome), ...(L.autor ? [L.autor] : [])])].sort()
+            .map(n => `<option ${n === L.autor ? "selected" : ""}>${esc(n)}</option>`).join("")}
+        </select>
+      </label>
       <button class="btn sec" id="btn-status">${L.status === "concluida" ? "✅ Concluída" : "🕓 Em andamento"}</button>
       <button class="btn sec" id="btn-salvar">✓ Salvo</button>
       <span class="espacador"></span>
@@ -832,7 +848,7 @@ function telaEditor(app, id) {
       <button class="btn" id="btn-pdf">📤 PDF</button>
     </div>
     <details class="be-notas">
-      <summary>📝 Anotações internas${L.autor ? " · autor: " + esc(L.autor) : ""} (não saem no PDF)</summary>
+      <summary>📝 Anotações internas (não saem no PDF)</summary>
       <textarea id="ed-anotacoes" placeholder="Anotações gerais desta lista…">${esc(L.anotacoes || "")}</textarea>
     </details>
   </div>
@@ -872,6 +888,14 @@ function telaEditor(app, id) {
   $("#ed-titulo").oninput = (e) => { L.titulo = e.target.value; salvar(); };
   $("#ed-projeto").onchange = (e) => { L.projetoId = e.target.value; salvar(); };
   $("#ed-anotacoes").oninput = (e) => { L.anotacoes = e.target.value; salvar(); };
+  $("#ed-autor").onchange = (e) => {
+    const antigo = L.autor;
+    L.autor = e.target.value;
+    /* se o solicitante ainda era o autor anterior, acompanha a troca */
+    if (L.autor && (!L.solicitante || L.solicitante === antigo)) L.solicitante = L.autor;
+    if (!L.assinaturasManuais) desenharFolha();
+    salvar();
+  };
   $("#btn-status").onclick = () => {
     L.status = L.status === "concluida" ? "andamento" : "concluida";
     $("#btn-status").textContent = L.status === "concluida" ? "✅ Concluída" : "🕓 Em andamento";
@@ -1084,7 +1108,7 @@ function telaEditor(app, id) {
   /* ===== folha RM: REQUISIÇÃO DE MATERIAL ===== */
   function folhaRM() {
     const total = totalDa(L);
-    if (!L.assinaturasManuais) L.assinaturas = assinaturasPorValor(total);
+    if (!L.assinaturasManuais) L.assinaturas = assinaturasPorValor(total, L.solicitante);
     $("#total-vivo").textContent = "Total: " + dinheiro(total);
 
     const linhaItem = (i, idx) => `
@@ -1101,7 +1125,7 @@ function telaEditor(app, id) {
     const linhaVazia = `<tr class="d-item d-vazia"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td class="d-remover no-print"></td></tr>`;
 
     const ass = [L.assinaturas[0] || "", L.assinaturas[1] || "", L.assinaturas[2] || ""];
-    const rotAss = (i, nome) => (i === 0 && nome === P.pedro) ? "VISTO SOLICITANTE" : "VISTO AUTORIZAÇÃO";
+    const rotAss = (i, nome) => (i === 0 && nome && nome === L.solicitante) ? "VISTO SOLICITANTE" : "VISTO AUTORIZAÇÃO";
     const celAss = (nome, i, colspan) => `
       <td colspan="${colspan}">
         ${nome ? `<div class="d-ass-nome">${esc(nome)}</div><div class="d-ass-cargo">${esc(cargoDe(nome))}</div>` : "&nbsp;"}
@@ -1181,7 +1205,7 @@ function telaEditor(app, id) {
       </tr>
     </table>
     <div class="no-print" style="margin-top:6px;font-size:11px;color:#777">
-      Assinaturas sugeridas pela alçada de valor (até R$ 5.000 / até R$ 20.000 / acima).
+      Assinaturas sugeridas pela alçada de valor (até R$ 5.000 / até R$ 30.000 / acima).
       ${L.assinaturasManuais ? '<button class="btn mini sec" id="btn-auto-ass">Voltar ao automático</button>' : "Troque nos seletores para fixar manualmente."}
     </div>`;
   }
@@ -1325,6 +1349,9 @@ function telaEditor(app, id) {
   function ligarEventosFolha() {
     $$("#folha [data-l]").forEach(el => {
       el.onchange = el.oninput = () => { L[el.dataset.l] = el.value; salvar(); };
+      if (el.dataset.l === "solicitante") {
+        el.onblur = () => { if (!L.assinaturasManuais) desenharFolha(); };   // 1º visto = solicitante
+      }
     });
     $$("#folha [data-qtd]").forEach(el => {
       el.onchange = () => { L.itens[+el.dataset.qtd].qtd = lerPreco(el.value); salvar(); desenharFolha(); };
