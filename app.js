@@ -508,13 +508,21 @@ function telaInicio(app) {
   ])].sort();
 
   const ativos = projetos.filter(p => p.status !== "arquivado" && donoOk(p.autor));
-  const rms = [...listas].reverse().filter(l => (l.tipo || "RM") !== "MM" && donoOk(l.autor));
-  const mms = [...listas].reverse().filter(l => l.tipo === "MM" && donoOk(l.autor));
+  const ordem = localStorage.getItem("rq.ordem") || "novas";   // 'novas' (padrão) ou 'antigas'
+  const quando = (l) => {
+    const t = Date.parse(l.criadoEm || "");                    // data de criação (aaaa-mm-dd)
+    if (!isNaN(t)) return t;
+    const p = parseInt(String(l.id).split("-")[0], 36);        // reserva: o id embute o timestamp
+    return isNaN(p) ? 0 : p;
+  };
+  const ordenar = (arr) => arr.sort((a, b) => ordem === "antigas" ? quando(a) - quando(b) : quando(b) - quando(a));
+  const rms = ordenar(listas.filter(l => (l.tipo || "RM") !== "MM" && donoOk(l.autor)));
+  const mms = ordenar(listas.filter(l => l.tipo === "MM" && donoOk(l.autor)));
   const cartaoLista = (l) => {
     const proj = projetos.find(p => p.id === l.projetoId);
     return `<div class="cartao ${l.status === "concluida" ? "concluida" : ""}">
       <h3><span class="etiqueta tipo">${l.tipo === "MM" ? "MM" : "RM"}</span> <a href="#/lista/${l.id}">${esc(l.titulo)}</a></h3>
-      <div class="sub">${l.itens.length} itens · ${dataBR(l.criadoEm)}${l.autor ? ` · por ${esc(l.autor)}` : ""}${proj ? ` · <span class="etiqueta">${esc(proj.nome)}</span>` : ""}${l.status === "concluida" ? ' · <span class="etiqueta ok">✔ concluída</span>' : ""}</div>
+      <div class="sub">${l.itens.length} itens · criada em ${dataBR(l.criadoEm)}${l.autor ? ` · por ${esc(l.autor)}` : ""}${proj ? ` · <span class="etiqueta">${esc(proj.nome)}</span>` : ""}${l.status === "concluida" ? ' · <span class="etiqueta ok">✔ concluída</span>' : ""}</div>
       <div class="rodape">
         <span class="valor">${dinheiro(totalDa(l))}</span>
         <span class="espacador"></span>
@@ -540,6 +548,10 @@ function telaInicio(app) {
   app.innerHTML = `
     <div class="pagina-titulo">
       <h1>Listas de materiais</h1><span class="espacador"></span>
+      <select id="filtro-ordem" title="Ordenar por data de criação">
+        <option value="novas" ${ordem === "novas" ? "selected" : ""}>🕘 Mais recentes primeiro</option>
+        <option value="antigas" ${ordem === "antigas" ? "selected" : ""}>🕘 Mais antigas primeiro</option>
+      </select>
       <select id="filtro-dono" title="De quem mostrar os cartões">
         <option value="meu" ${filtro === "meu" ? "selected" : ""}>👤 Meus</option>
         <option value="todos" ${filtro === "todos" ? "selected" : ""}>👥 Todos</option>
@@ -575,6 +587,7 @@ function telaInicio(app) {
     location.hash = "#/lista/" + l.id;
   };
   $("#filtro-dono").onchange = (e) => { localStorage.setItem("rq.filtroDono", e.target.value); render(); };
+  $("#filtro-ordem").onchange = (e) => { localStorage.setItem("rq.ordem", e.target.value); render(); };
   $("#btn-nova-lista").onclick = criarLista;
   const b2 = $("#btn-nova-lista-2"); if (b2) b2.onclick = criarLista;
   $("#btn-nova-mm").onclick = () => {
