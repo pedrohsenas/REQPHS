@@ -325,7 +325,8 @@ async function importarArquivoBanco(arquivo) {
       l.forEach((v, j) => { if (v != null) mapa[norm(v).trim()] = j; });
       if (mapa["CODIGO"] != null && mapa["DESCRICAO"] != null) {
         cab = i;
-        col = { codigo: mapa["CODIGO"], desc: mapa["DESCRICAO"], un: mapa["UN"], sit: mapa["SITUACAO"] };
+        col = { codigo: mapa["CODIGO"], desc: mapa["DESCRICAO"], un: mapa["UN"], sit: mapa["SITUACAO"],
+                dp: mapa["DP"], gr: mapa["GR"], sb: mapa["SB"] };
         break;
       }
     }
@@ -336,13 +337,28 @@ async function importarArquivoBanco(arquivo) {
       if (typeof v === "number" && Number.isInteger(v)) v = String(v);
       return String(v).trim();
     };
+    /* 1ª passada: só itens ATIVOS, agrupados por DP/GR para a triagem */
+    const brutos = [];
+    let descartadosInativos = 0;
     for (let i = cab + 1; i < linhas.length; i++) {
       const l = linhas[i] || [];
       const codigo = pega(l, col.codigo), desc = pega(l, col.desc);
       if (!codigo || !desc) continue;
       const ativo = (col.sit == null) ? 1 : (norm(pega(l, col.sit)) === "ATIVO" ? 1 : 0);
-      novos.push([codigo, desc, pega(l, col.un) || "UN", ativo]);
+      if (!ativo) { descartadosInativos++; continue; }   // inativos nem entram no banco
+      brutos.push([codigo, desc, pega(l, col.un) || "UN", 1,
+                   pega(l, col.dp), pega(l, col.gr), pega(l, col.sb)]);
       if (i % 20000 === 0) { prog.textContent = `Processando… ${i.toLocaleString("pt-BR")} linhas`; await new Promise(r => setTimeout(r, 0)); }
+    }
+    if (!brutos.length) throw new Error("Nenhum item ativo encontrado no arquivo.");
+
+    /* triagem por grupo: o usuário escolhe o que interessa à engenharia */
+    if (col.dp != null) {
+      const escolhidos = await escolherGrupos(brutos, descartadosInativos);
+      if (!escolhidos) { prog.textContent = "Importação cancelada."; return; }
+      novos = brutos.filter(b => escolhidos.has(b[4] + "/" + b[5])).map(b => b.slice(0, 4));
+    } else {
+      novos = brutos.map(b => b.slice(0, 4));
     }
   }
   if (!novos.length) throw new Error("Nenhum item encontrado no arquivo.");
@@ -365,20 +381,34 @@ async function importarArquivoBanco(arquivo) {
     if (mudou) alterados.push([c, d, u, a]);
     anterior.set(c, [c, d, u, a]);           // sobrescreve nome/unidade/situação
   }
-  // desativa o que sumiu do arquivo — só quando o arquivo parece ser a base completa
+  // remove do banco o que não veio na carga (inativos e grupos não escolhidos)
   const baseCompleta = novos.length >= anterior.size * 0.5;
+  const removidos = [];
   if (baseCompleta) {
-    for (const [c, reg] of anterior) {
-      if (!vistos.has(c) && reg[3] === 1) { reg[3] = 0; qDesativados++; alterados.push([...reg]); }
+    for (const [c] of anterior) {
+      if (!vistos.has(c)) { anterior.delete(c); removidos.push(c); qDesativados++; }
     }
   }
 
   const itens = [...anterior.values()];
   prog.textContent = "Salvando no navegador…";
   const agora = new Date().toISOString();
-  const registro = { v: 2, em: agora, sync: agora, itens };
+  /* sem "sync" quando houve remoção: os outros dispositivos refazem a carga completa,
+     pois a sincronização incremental não enxerga itens excluídos */
+  const registro = { v: 2, em: agora, sync: removidos.length ? null : agora, itens };
   await IDB.gravar("banco", registro);
   indexarBanco(itens);
+
+  /* apaga na nuvem os itens que saíram do banco (inativos / grupos não escolhidos) */
+  if (sb && removidos.length) {
+    for (let i = 0; i < removidos.length; i += 500) {
+      const lote = removidos.slice(i, i + 500);
+      const { error } = await sb.from("req_itens").delete().in("codigo", lote);
+      if (error) console.warn("nuvem/remoção:", error.message);
+      prog.textContent = `Limpando a nuvem… ${Math.min(i + 500, removidos.length).toLocaleString("pt-BR")} de ${removidos.length.toLocaleString("pt-BR")}`;
+      await new Promise(r => setTimeout(r, 0));
+    }
+  }
 
   /* envia as mudanças para a nuvem em lotes (todos da equipe passam a ver) */
   if (sb && alterados.length) {
@@ -395,7 +425,7 @@ async function importarArquivoBanco(arquivo) {
 
   prog.innerHTML = `<strong>Mesclagem concluída:</strong> ${qNovos.toLocaleString("pt-BR")} novos · `
     + `${qAtualizados.toLocaleString("pt-BR")} atualizados · ${qReativados.toLocaleString("pt-BR")} reativados · `
-    + `${qDesativados.toLocaleString("pt-BR")} desativados`
+    + `${qDesativados.toLocaleString("pt-BR")} removidos`
     + (baseCompleta ? "" : "<br>⚠️ Arquivo pequeno em relação ao banco atual: nada foi desativado (parece uma carga parcial).")
     + `<br>Total agora: ${itens.length.toLocaleString("pt-BR")} itens. `
     + (sb ? "Enviado para a nuvem: toda a equipe já vê a base atualizada."
@@ -403,6 +433,93 @@ async function importarArquivoBanco(arquivo) {
   const st = $("#status-banco");
   st.textContent = `banco: ${itens.filter(i => i[3] === 1).length.toLocaleString("pt-BR")} ativos de ${itens.length.toLocaleString("pt-BR")} (deste navegador · ${dataBR(hoje())})`;
   st.className = "status-banco ok";
+}
+
+/* ============================================================
+   Triagem de grupos: mostra DP/GR com contagem e amostras reais
+   para o usuário marcar só o que interessa à engenharia.
+   ============================================================ */
+function escolherGrupos(brutos, inativos) {
+  return new Promise((resolve) => {
+    /* agrupa por DP/GR guardando exemplos de descrição */
+    const grupos = new Map();
+    for (const b of brutos) {
+      const chave = b[4] + "/" + b[5];
+      let g = grupos.get(chave);
+      if (!g) { g = { chave, dp: b[4], gr: b[5], n: 0, amostras: [] }; grupos.set(chave, g); }
+      g.n++;
+      if (g.amostras.length < 3 && g.n % 7 === 1) g.amostras.push(b[1]);
+    }
+    const lista = [...grupos.values()].sort((a, b) => b.n - a.n);
+    const marcados = new Set(LS.ler("rq.gruposEscolhidos", []));
+    const primeiraVez = marcados.size === 0;
+
+    const cx = document.createElement("div");
+    cx.className = "modal";
+    cx.innerHTML = `
+      <div class="modal-caixa" style="max-width:820px;max-height:88vh;display:flex;flex-direction:column">
+        <h2>Escolha os grupos de itens</h2>
+        <p style="margin:0 0 8px">
+          ${brutos.length.toLocaleString("pt-BR")} itens ativos em ${lista.length} grupos.
+          ${inativos ? `<strong>${inativos.toLocaleString("pt-BR")}</strong> inativos já foram descartados.` : ""}
+          Marque apenas os grupos usados pela engenharia — os demais não entram no banco, deixando a busca leve e limpa.
+        </p>
+        <div class="triagem-acoes">
+          <input type="text" id="filtro-grupos" placeholder="Filtrar por descrição, DP ou GR…" style="flex:1">
+          <button class="btn sec mini" id="tri-todos">Marcar todos</button>
+          <button class="btn sec mini" id="tri-nenhum">Desmarcar todos</button>
+        </div>
+        <div class="triagem-lista" id="tri-lista"></div>
+        <div class="modal-acoes" style="align-items:center">
+          <span id="tri-resumo" class="contagem"></span>
+          <span class="espacador" style="flex:1"></span>
+          <button class="btn sec" id="tri-cancelar">Cancelar</button>
+          <button class="btn" id="tri-ok">Importar selecionados</button>
+        </div>
+      </div>`;
+    document.body.appendChild(cx);
+
+    const alvo = cx.querySelector("#tri-lista");
+    const resumo = cx.querySelector("#tri-resumo");
+    const atualizarResumo = () => {
+      const total = lista.filter(g => marcados.has(g.chave)).reduce((s, g) => s + g.n, 0);
+      resumo.textContent = `${marcados.size} grupo(s) · ${total.toLocaleString("pt-BR")} itens serão importados`;
+    };
+    const desenhar = () => {
+      const f = norm(cx.querySelector("#filtro-grupos").value.trim());
+      const vis = f ? lista.filter(g => norm(g.chave + " " + g.amostras.join(" ")).includes(f)) : lista;
+      alvo.innerHTML = vis.map(g => `
+        <label class="tri-item">
+          <input type="checkbox" data-g="${esc(g.chave)}" ${marcados.has(g.chave) ? "checked" : ""}>
+          <span class="tri-cod">DP ${esc(g.dp)} · GR ${esc(g.gr)}</span>
+          <span class="tri-n">${g.n.toLocaleString("pt-BR")}</span>
+          <span class="tri-amostra">${esc(g.amostras.join(" · ") || "—")}</span>
+        </label>`).join("") || `<div class="vazio">Nenhum grupo com esse filtro.</div>`;
+      alvo.querySelectorAll("input[data-g]").forEach(el => {
+        el.onchange = () => {
+          if (el.checked) marcados.add(el.dataset.g); else marcados.delete(el.dataset.g);
+          atualizarResumo();
+        };
+      });
+      atualizarResumo();
+    };
+    cx.querySelector("#filtro-grupos").oninput = desenhar;
+    cx.querySelector("#tri-todos").onclick = () => { lista.forEach(g => marcados.add(g.chave)); desenhar(); };
+    cx.querySelector("#tri-nenhum").onclick = () => { marcados.clear(); desenhar(); };
+    cx.querySelector("#tri-cancelar").onclick = () => { cx.remove(); resolve(null); };
+    cx.querySelector("#tri-ok").onclick = () => {
+      if (!marcados.size) { alert("Marque ao menos um grupo."); return; }
+      LS.gravar("rq.gruposEscolhidos", [...marcados]);   // lembra a escolha nas próximas cargas
+      cx.remove();
+      resolve(marcados);
+    };
+    if (primeiraVez) {
+      /* sugestão inicial: grupos cujas amostras parecem de manutenção/engenharia */
+      const pistas = /CABO|DISJ|MOTOR|ROLAMENTO|PARAFUSO|VALVULA|SENSOR|LAMPADA|CONECTOR|CORREIA|MANGUEIRA|FILTRO|BOMBA|CHAVE|RELE|CONTATOR|TUBO|CHAPA|ELETROD|FUSIVEL|INVERSOR|TRANSFORMADOR|LUVA|ABRACADEIRA|GRAXA|ROLO|ENGRENAGEM|VEDA|RETENTOR|MANCAL|POLIA|SOLDA|BROCA|TINTA|CANALETA|CONDULETE|TERMINAL/;
+      lista.forEach(g => { if (pistas.test(norm(g.amostras.join(" ")))) marcados.add(g.chave); });
+    }
+    desenhar();
+  });
 }
 
 /* baixa o banco mesclado para publicar no repositório (dados/banco.json) */
