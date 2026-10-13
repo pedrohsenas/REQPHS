@@ -108,9 +108,12 @@ const nuvemAtiva = () => !!(CFG.url && CFG.anonKey && window.supabase);
 const sb = nuvemAtiva() ? window.supabase.createClient(CFG.url, CFG.anonKey) : null;
 
 async function nuvemSalvarLista(l) {
-  if (!sb) return;
-  const { error } = await sb.from("req_listas").upsert({ id: l.id, dados: l, atualizado_em: new Date().toISOString() });
-  if (error) console.warn("nuvem/listas:", error.message);
+  if (!sb) return true;                       // modo local: gravar no navegador já é "salvo"
+  try {
+    const { error } = await sb.from("req_listas").upsert({ id: l.id, dados: l, atualizado_em: new Date().toISOString() });
+    if (error) { console.warn("nuvem/listas:", error.message); return false; }
+    return true;
+  } catch (e) { console.warn("nuvem/listas:", e.message); return false; }
 }
 async function nuvemExcluirLista(id) {
   if (!sb) return;
@@ -576,7 +579,7 @@ function novaLista(titulo, projetoId, tipo) {
     local: "185 - UIS 3", areaSetor: "PROJETOS",
     emissao: hoje(), revisao: "0", numero: "",
     descricao: "", data: hoje(),
-    solicitante: eu, setor: "9313", projetoNum: "", nrOS: "",
+    solicitante: eu, setor: "", projetoNum: "", nrOS: "",   // setor em branco: código do cadastro
     observacao: "COMUNICAR O SOLICITANTE QUANDO DA CHEGADA.",
     itens: [],                       // {codigo, descricao, un, qtd, preco}
     assinaturas: [],
@@ -593,11 +596,181 @@ const totalDa = (l) => l.tipo === "MM"
   ? l.itens.reduce((s, i) => s + (i.qtdMin || 0) * (i.preco || 0), 0)     // MM: valor total = Qtde MÍN × valor un (padrão do FO)
   : l.itens.reduce((s, i) => s + (i.qtd || 0) * (i.preco || 0), 0);
 
+/* ============================================================
+   LOG DE EDIÇÕES — só registra o que foi efetivamente salvo
+   Cada lista guarda l.log = [{em, por, inicio?, mudancas:[{k,t,de,para}]}]
+   Edições seguidas da mesma pessoa (até 15 min) viram uma entrada só.
+   ============================================================ */
+const LOG_MAX = 60;                 // entradas guardadas por lista
+const LOG_MUDANCAS_MAX = 40;        // linhas de mudança por entrada
+const LOG_JUNTAR_MIN = 15;          // janela para juntar edições da mesma pessoa
+const quemSou = () => (usuarioAtual && usuarioAtual.nome) || emailSessao || "Usuário local";
+const dataHoraBR = (iso) => {
+  const d = new Date(iso); if (!iso || isNaN(d)) return "";
+  return d.toLocaleDateString("pt-BR") + " " + d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+};
+const horaBR = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }); };
+const curto = (s, n = 48) => { s = String(s ?? "").replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
+const fmtNum = (n) => n ? new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 3 }).format(n) : "";
+const ultimaEdicao = (l) => (l && l.log && l.log.length) ? l.log[l.log.length - 1] : null;
+
+const CAMPOS_LOG = [
+  ["titulo", "Título"], ["status", "Status"], ["projetoId", "Projeto vinculado"], ["autor", "Autor"],
+  ["numeroFO", "Número"], ["local", "Local"], ["areaSetor", "Área/Setor"], ["descricao", "Descrição"],
+  ["data", "Data"], ["solicitante", "Solicitante"], ["setor", "Setor"], ["projetoNum", "Projeto (nº)"],
+  ["nrOS", "NR O.S."], ["observacao", "Observação"],
+];
+function valorLog(campo, v) {
+  if (v == null || v === "") return "";
+  if (campo === "status") return v === "concluida" ? "Concluída" : "Em andamento";
+  if (campo === "projetoId") { const p = projetos.find(x => x.id === v); return p ? p.nome : "(projeto removido)"; }
+  if (campo === "data") return dataBR(v);
+  return curto(v, 60);
+}
+const rotItem = (i) => ((i.codigo && i.codigo !== "S/ CÓD.") ? i.codigo + " · " : "") + curto(i.descricao, 42);
+/* item com quantidades e preço, para inclusões/remoções no log */
+function descItemLog(i) {
+  const un = i.un ? " " + i.un : "";
+  let q = "";
+  if (i.qtdMin !== undefined || i.qtdMax !== undefined) {
+    q = [i.qtdMin ? "mín " + fmtNum(i.qtdMin) : "", i.qtdMax ? "máx " + fmtNum(i.qtdMax) : ""].filter(Boolean).join(" / ");
+  } else if (i.qtd) q = fmtNum(i.qtd);
+  return rotItem(i) + (q ? ` (${q}${un})` : "") + (i.preco ? " × " + dinheiro(i.preco) : "");
+}
+function mapaItens(l) {
+  const m = new Map(), n = {};
+  for (const i of (l.itens || [])) {
+    const b = (i.codigo || "") + "|" + norm(i.descricao);
+    n[b] = (n[b] || 0) + 1;
+    m.set(b + "#" + n[b], i);
+  }
+  return m;
+}
+const CAMPOS_ITEM_LOG = [
+  ["qtd", "Qtd.", fmtNum], ["qtdMin", "Qtde mín.", fmtNum], ["qtdMax", "Qtde máx.", fmtNum],
+  ["preco", "Valor un.", (v) => v ? dinheiro(v) : ""], ["justificativa", "Justificativa", (v) => curto(v, 40)],
+];
+/* compara duas versões da lista e devolve as mudanças */
+function diffLista(a, b) {
+  const mud = [];
+  for (const [c, rot] of CAMPOS_LOG) {
+    if (String(a[c] ?? "") !== String(b[c] ?? "")) mud.push({ k: "f:" + c, t: rot, de: valorLog(c, a[c]), para: valorLog(c, b[c]) });
+  }
+  if ((a.anotacoes || "") !== (b.anotacoes || "")) mud.push({ k: "f:anotacoes", t: "Anotações internas alteradas" });
+  const assA = (a.assinaturas || []).join(", "), assB = (b.assinaturas || []).join(", ");
+  if (assA !== assB) mud.push({ k: "f:assinaturas", t: "Assinaturas", de: assA, para: assB });
+  const ma = mapaItens(a), mb = mapaItens(b);
+  for (const [k, ib] of mb) {
+    const ia = ma.get(k);
+    if (!ia) { mud.push({ k: "+:" + k, t: "Item incluído", para: descItemLog(ib) }); continue; }
+    for (const [c, rot, f] of CAMPOS_ITEM_LOG) {
+      if (String(ia[c] || "") !== String(ib[c] || "")) mud.push({ k: c + ":" + k, t: rot + " — " + rotItem(ib), de: f(ia[c]), para: f(ib[c]) });
+    }
+  }
+  for (const [k, ia] of ma) if (!mb.has(k)) mud.push({ k: "-:" + k, t: "Item removido", de: descItemLog(ia) });
+  return mud;
+}
+/* junta mudanças novas numa entrada existente (de → para final; incluído+removido se anulam) */
+function juntarMudancas(velhas, novas, l) {
+  const r = velhas.map(m => ({ ...m }));
+  for (const m of novas) {
+    const chave = m.k.slice(m.k.indexOf(":") + 1);
+    if (m.k.startsWith("-:") && r.some(x => x.k === "+:" + chave)) {
+      for (let j = r.length - 1; j >= 0; j--) if (r[j].k.endsWith(":" + chave)) r.splice(j, 1);
+      continue;
+    }
+    if (m.k.startsWith("+:")) {
+      const iRem = r.findIndex(x => x.k === "-:" + chave);
+      if (iRem >= 0) { r.splice(iRem, 1); continue; }
+    }
+    const i = r.findIndex(x => x.k === m.k);
+    if (i < 0) { r.push({ ...m }); continue; }
+    r[i].para = m.para;
+    if (r[i].de !== undefined && (r[i].de || "") === (r[i].para || "")) r.splice(i, 1);   // voltou ao original
+  }
+  return consolidarIncluidos(r, l).slice(-LOG_MUDANCAS_MAX);
+}
+/* itens incluídos nesta entrada: o texto reflete qtd/preço finais e os ajustes avulsos somem */
+function consolidarIncluidos(r, l) {
+  if (!l) return r;
+  const incl = new Set(r.filter(x => x.k.startsWith("+:")).map(x => x.k.slice(2)));
+  if (!incl.size) return r;
+  const mapa = mapaItens(l);
+  return r.filter(x => {
+    const i = x.k.indexOf(":");
+    return i < 0 || x.k.startsWith("+:") || !incl.has(x.k.slice(i + 1));
+  }).map(x => {
+    if (!x.k.startsWith("+:")) return x;
+    const it = mapa.get(x.k.slice(2));
+    return it ? { ...x, para: descItemLog(it) } : x;
+  });
+}
+/* registra no log da lista; devolve uma função que desfaz (se o salvamento falhar) */
+function registrarLog(l, mudancas) {
+  const antes = (l.log || []).slice();
+  const agora = new Date().toISOString(), por = quemSou();
+  const ult = antes[antes.length - 1];
+  const marco = mudancas.some(m => m.k === "f:status");      // concluir/reabrir: sempre entrada própria
+  let novo;
+  if (!marco && ult && !ult.marco && ult.por === por && (Date.parse(agora) - Date.parse(ult.em)) < LOG_JUNTAR_MIN * 60000) {
+    novo = antes.slice(0, -1).concat([{ em: agora, por, inicio: ult.inicio || ult.em, mudancas: juntarMudancas(ult.mudancas || [], mudancas, l) }]);
+  } else {
+    const e = { em: agora, por, mudancas: consolidarIncluidos(mudancas, l).slice(0, LOG_MUDANCAS_MAX) };
+    if (marco) e.marco = true;
+    novo = antes.concat([e]);
+  }
+  l.log = novo.slice(-LOG_MAX);
+  return () => { l.log = antes; };
+}
+function htmlMudanca(m) {
+  if (m.k.startsWith("+:")) return `<span class="lg-add">+ incluído</span> ${esc(m.para)}`;
+  if (m.k.startsWith("-:")) return `<span class="lg-rem">− removido</span> <span class="lg-de">${esc(m.de)}</span>`;
+  if (m.de === undefined && m.para === undefined) return esc(m.t);
+  return `${esc(m.t)}: <span class="lg-de">${esc(m.de || "vazio")}</span> → <strong>${esc(m.para || "vazio")}</strong>`;
+}
+function faixaLog(e) {
+  if (e.inicio && new Date(e.inicio).toDateString() === new Date(e.em).toDateString() && horaBR(e.inicio) !== horaBR(e.em))
+    return `${dataHoraBR(e.inicio)}–${horaBR(e.em)}`;
+  return dataHoraBR(e.em);
+}
+
+/* aviso flutuante discreto */
+function toast(msg) {
+  let el = $("#toast");
+  if (!el) { el = document.createElement("div"); el.id = "toast"; el.className = "toast no-print"; document.body.appendChild(el); }
+  el.textContent = msg; el.classList.add("visivel");
+  clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove("visivel"), 2600);
+}
+
+/* setores: só código numérico */
+const setorValido = (v) => /^\d+$/.test(String(v || ""));
+const setorCadastrado = (v) => (setores || []).some(s => s.nome === v);
+
+/* editor aberto: ao sair da tela, salva o que estiver pendente */
+let editorAtivo = null;
+let roZoom = null;
+function sairDoEditor() {
+  if (editorAtivo) { editorAtivo.commit(); editorAtivo = null; }
+  if (roZoom) { roZoom.disconnect(); roZoom = null; }
+}
+document.addEventListener("visibilitychange", () => { if (document.hidden && editorAtivo) editorAtivo.commit(); });
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k" && editorAtivo) { e.preventDefault(); editorAtivo.focarBusca(); }
+});
+function marcarSetor(el) {
+  const fora = !!el.value && !setorCadastrado(el.value);
+  el.classList.toggle("fora-cadastro", fora);
+  el.title = fora ? "Setor fora do cadastro (Cadastros → Setores)" : "Código numérico do setor — sugestões do cadastro";
+}
+
 /* ---------------- roteamento ---------------- */
 window.addEventListener("hashchange", render);
 function render() {
   const h = location.hash || "#/";
   const app = $("#app");
+  sairDoEditor();                                   // salva pendências do editor anterior
+  app.onclick = null;                               // cada tela liga os próprios cliques
+  document.body.classList.toggle("pg-editor", h.startsWith("#/lista/"));
   if (h.startsWith("#/lista/"))       telaEditor(app, h.slice(8));
   else if (h.startsWith("#/projeto/")) telaProjeto(app, h.slice(10));
   else if (h === "#/cadastros")        telaCadastros(app);
@@ -637,9 +810,11 @@ function telaInicio(app) {
   const mms = ordenar(listas.filter(l => l.tipo === "MM" && donoOk(l.autor)));
   const cartaoLista = (l) => {
     const proj = projetos.find(p => p.id === l.projetoId);
+    const ult = ultimaEdicao(l);
     return `<div class="cartao ${l.status === "concluida" ? "concluida" : ""}">
       <h3><span class="etiqueta tipo">${l.tipo === "MM" ? "MM" : "RM"}</span> <a href="#/lista/${l.id}">${esc(l.titulo)}</a></h3>
       <div class="sub">${l.itens.length} itens · criada em ${dataBR(l.criadoEm)}${l.autor ? ` · por ${esc(l.autor)}` : ""}${proj ? ` · <span class="etiqueta">${esc(proj.nome)}</span>` : ""}${l.status === "concluida" ? ' · <span class="etiqueta ok">✔ concluída</span>' : ""}</div>
+      ${ult ? `<div class="sub ult" title="Última edição salva">✎ ${esc(dataHoraBR(ult.em))} · ${esc(ult.por)}</div>` : ""}
       <div class="rodape">
         <span class="valor">${dinheiro(totalDa(l))}</span>
         <span class="espacador"></span>
@@ -700,6 +875,7 @@ function telaInicio(app) {
     }
     const l = prepararAssinaturas(novaLista(titulo.trim() || "Nova requisição", projetoId));
     l.descricao = "";
+    registrarLog(l, [{ k: "criada", t: "Requisição criada" }]);
     listas.push(l); salvarTudo(); nuvemSalvarLista(l);
     location.hash = "#/lista/" + l.id;
   };
@@ -715,6 +891,7 @@ function telaInicio(app) {
     l.descricao = "RELAÇÃO DE MÍNIMOS E MÁXIMOS PARA COMPRA";
     l.setor = "";
     prepararAssinaturas(l);
+    registrarLog(l, [{ k: "criada", t: "Cadastro MM criado" }]);
     listas.push(l); salvarTudo(); nuvemSalvarLista(l);
     location.hash = "#/lista/" + l.id;
   };
@@ -728,12 +905,14 @@ function telaInicio(app) {
     const d = e.target.dataset || {};
     if (d.excluirLista) {
       const l = listas.find(x => x.id === d.excluirLista);
-      if (confirm(`Excluir a lista “${l.titulo}”?`)) { listas = listas.filter(x => x.id !== d.excluirLista); salvarTudo(); nuvemExcluirLista(d.excluirLista); render(); }
+      if (confirm(`Excluir a lista “${l.titulo}”?${l.status === "concluida" ? "\n\nAtenção: esta requisição está CONCLUÍDA." : ""}`)) { listas = listas.filter(x => x.id !== d.excluirLista); salvarTudo(); nuvemExcluirLista(d.excluirLista); render(); }
     }
     if (d.duplicar) {
       const o = listas.find(x => x.id === d.duplicar);
       const c = JSON.parse(JSON.stringify(o));
       c.id = uid(); c.titulo = o.titulo + " (cópia)"; c.criadoEm = hoje();
+      c.status = "andamento"; c.log = [];               // a cópia nasce editável e com histórico próprio
+      registrarLog(c, [{ k: "criada", t: `Criada como cópia de “${curto(o.titulo, 50)}”` }]);
       listas.push(c); salvarTudo(); nuvemSalvarLista(c); render();
     }
     if (d.arquivarProjeto) {
@@ -744,7 +923,12 @@ function telaInicio(app) {
     if (d.excluirProjeto) {
       const p = projetos.find(x => x.id === d.excluirProjeto);
       if (confirm(`Excluir o projeto “${p.nome}”? As listas continuam existindo, apenas sem o vínculo.`)) {
-        listas.forEach(l => { if (l.projetoId === d.excluirProjeto) { l.projetoId = ""; nuvemSalvarLista(l); } });
+        listas.forEach(l => {
+          if (l.projetoId !== d.excluirProjeto) return;
+          l.projetoId = "";
+          registrarLog(l, [{ k: "f:projetoId", t: "Projeto vinculado", de: p.nome, para: "" }]);
+          nuvemSalvarLista(l);
+        });
         projetos = projetos.filter(x => x.id !== d.excluirProjeto);
         salvarTudo(); nuvemExcluirProjeto(d.excluirProjeto); render();
       }
@@ -785,9 +969,12 @@ function telaProjeto(app, id) {
       <div class="resumo-num"><div class="rot">Valor total</div><div class="val">${dinheiro(total)}</div></div>
     </div>
     <div class="secao-titulo">Listas do projeto</div>
-    <table class="app"><thead><tr><th>Lista</th><th>Itens</th><th class="num">Total</th><th></th></tr></thead><tbody>
-      ${ls.map(l => `<tr><td>${esc(l.titulo)}</td><td>${l.itens.length}</td><td class="num">${dinheiro(totalDa(l))}</td>
-        <td><a class="btn mini sec" href="#/lista/${l.id}">Abrir</a></td></tr>`).join("") || `<tr><td colspan="4">Nenhuma lista vinculada.</td></tr>`}
+    <table class="app"><thead><tr><th>Lista</th><th>Status</th><th>Itens</th><th>Última edição salva</th><th class="num">Total</th><th></th></tr></thead><tbody>
+      ${ls.map(l => { const u = ultimaEdicao(l); return `<tr><td>${esc(l.titulo)}</td>
+        <td>${l.status === "concluida" ? '<span class="etiqueta ok">✔ concluída</span>' : '<span class="etiqueta">em andamento</span>'}</td>
+        <td>${l.itens.length}</td><td style="font-size:12px;color:var(--cinza)">${u ? `${esc(dataHoraBR(u.em))} · ${esc(u.por)}` : "—"}</td>
+        <td class="num">${dinheiro(totalDa(l))}</td>
+        <td><a class="btn mini sec" href="#/lista/${l.id}">Abrir</a></td></tr>`; }).join("") || `<tr><td colspan="6">Nenhuma lista vinculada.</td></tr>`}
     </tbody></table>
     <div class="secao-titulo">Materiais consolidados (todas as listas)</div>
     <table class="app"><thead><tr><th>Código</th><th>Descrição</th><th>Un</th><th class="num">Qtd. total</th><th class="num">Valor</th></tr></thead><tbody>
@@ -807,6 +994,7 @@ function telaProjeto(app, id) {
     const t = prompt("Título da lista:", "");
     if (t === null) return false;
     const l = prepararAssinaturas(novaLista(t.trim() || "Nova requisição", pid));
+    registrarLog(l, [{ k: "criada", t: "Requisição criada" }]);
     listas.push(l); salvarTudo(); nuvemSalvarLista(l);
     location.hash = "#/lista/" + l.id;
     return false;
@@ -857,7 +1045,7 @@ function telaCadastros(app) {
       <button class="btn mini perigo" data-excluir-pessoa="${p.id}">Excluir</button>
     </td></tr>`;
   const linhaSetor = (s) => `<tr>
-    <td>${esc(s.nome)}</td>
+    <td>${esc(s.nome)}${setorValido(s.nome) ? "" : ' <span class="etiqueta" title="Edite para um código só com números">não numérico</span>'}</td>
     <td style="white-space:nowrap">
       <button class="btn mini sec" data-editar-setor="${s.id}">Editar</button>
       <button class="btn mini perigo" data-excluir-setor="${s.id}">Excluir</button>
@@ -876,9 +1064,11 @@ function telaCadastros(app) {
       <tbody>${pessoas.map(linhaPessoa).join("")}</tbody></table>
     <button class="btn" id="btn-add-pessoa" style="margin-top:10px">+ Adicionar assinante</button>
 
-    <div class="secao-titulo">Setores (usados no Cadastro de Mín/Máx)</div>
+    <div class="secao-titulo">Setores (código numérico)</div>
+    <p style="font-size:12px;color:var(--cinza);margin:0 0 8px">
+      Aparecem como sugestão no campo <strong>SETOR</strong> da RM e do MM (que aceita apenas números). Novas requisições começam com o setor em branco.</p>
     <table class="app" style="max-width:480px"><thead><tr><th>Setor</th><th></th></tr></thead>
-      <tbody>${setores.map(linhaSetor).join("")}</tbody></table>
+      <tbody>${setores.slice().sort((a, b) => String(a.nome).localeCompare(String(b.nome), "pt-BR", { numeric: true })).map(linhaSetor).join("")}</tbody></table>
     <button class="btn" id="btn-add-setor" style="margin-top:10px">+ Adicionar setor</button>`;
 
   const pedirPessoa = (p = {}) => {
@@ -887,14 +1077,26 @@ function telaCadastros(app) {
     const email = prompt("E-mail de login (opcional, vincula ao Supabase):", p.email || ""); if (email === null) return null;
     return { nome: nome.trim(), cargo: cargo.trim(), email: email.trim().toLowerCase() };
   };
+  /* pede o código do setor: só números e sem repetir */
+  const pedirSetor = (atual = "") => {
+    let sugestao = atual;
+    for (;;) {
+      const v = prompt("Código numérico do setor (somente números, ex.: 9313):", sugestao);
+      if (v === null) return null;
+      const c = v.replace(/\s/g, "");
+      if (!setorValido(c)) { alert("Use apenas números no código do setor."); sugestao = v; continue; }
+      if (c !== atual && setores.some(s => s.nome === c)) { alert(`O setor ${c} já está cadastrado.`); sugestao = c; continue; }
+      return c;
+    }
+  };
   $("#btn-add-pessoa").onclick = () => {
     const d = pedirPessoa(); if (!d) return;
     const p = { id: uid(), ...d };
     pessoas.push(p); salvarCadastros(); nuvemSalvarPessoa(p); deduzirUsuario(); render();
   };
   $("#btn-add-setor").onclick = () => {
-    const nome = prompt("Nome/código do setor:"); if (!nome || !nome.trim()) return;
-    const s = { id: uid(), nome: nome.trim() };
+    const nome = pedirSetor(); if (!nome) return;
+    const s = { id: uid(), nome };
     setores.push(s); salvarCadastros(); nuvemSalvarSetor(s); render();
   };
   app.onclick = (e) => {
@@ -913,8 +1115,8 @@ function telaCadastros(app) {
     }
     if (d.editarSetor) {
       const s = setores.find(x => x.id === d.editarSetor);
-      const nome = prompt("Nome/código do setor:", s.nome); if (!nome || !nome.trim()) return;
-      s.nome = nome.trim(); salvarCadastros(); nuvemSalvarSetor(s); render();
+      const nome = pedirSetor(s.nome); if (!nome) return;
+      s.nome = nome; salvarCadastros(); nuvemSalvarSetor(s); render();
     }
     if (d.excluirSetor) {
       const s = setores.find(x => x.id === d.excluirSetor);
@@ -927,7 +1129,8 @@ function telaCadastros(app) {
 }
 
 /* ============================================================
-   TELA: EDITOR — busca à esquerda, folha A4 ao vivo à direita
+   TELA: EDITOR — painel lateral recolhível (itens · anotações ·
+   histórico) e folha A4 ao vivo numa "mesa" de tela cheia
    ============================================================ */
 function telaEditor(app, id) {
   const L = listas.find(x => x.id === id);
@@ -938,81 +1141,193 @@ function telaEditor(app, id) {
   const prefixoPdf = ehMM ? "MM_UIS3_" : "RM_UIS3_";
   const nomePdf = () => prefixoPdf + (L.titulo || "documento").replace(/[\\/:*?"<>|]/g, "-");
 
-  /* salvar: local na hora; nuvem 0,8s após parar de digitar; botão mostra o estado */
-  let tNuvem = null;
-  const marcarSalvo = (ok) => {
-    const b = $("#btn-salvar"); if (!b) return;
-    b.textContent = ok ? "✓ Salvo" : "💾 Salvar";
-    b.classList.toggle("salvo", ok);
-  };
-  const salvar = () => {
-    salvarTudo(); marcarSalvo(false);
-    clearTimeout(tNuvem);
-    tNuvem = setTimeout(async () => { await nuvemSalvarLista(L); marcarSalvo(true); }, 800);
-  };
+  const travada = () => L.status === "concluida";
+  const abaInicial = sessionStorage.getItem("rq.latAba") || "itens";
+  const setoresNum = setores.filter(s => setorValido(s.nome))
+    .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR", { numeric: true }));
 
   app.innerHTML = `
-  <div class="barra-editor no-print">
-    <div class="be-linha">
-      <span class="be-tipo">${ehMM ? "MM" : "RM"}</span>
-      <input type="text" id="ed-titulo" class="be-titulo" value="${esc(L.titulo)}" placeholder="Título">
-      <select id="ed-projeto" title="Projeto">
+  <div class="ed">
+    <div class="ed-barra no-print">
+      <span class="ed-tipo" title="${ehMM ? "Relação de Mínimos e Máximos para Compra" : "Requisição de Material"}">${ehMM ? "MM" : "RM"}</span>
+      <input type="text" id="ed-titulo" class="ed-titulo" value="${esc(L.titulo)}" placeholder="Título da lista">
+      <select id="ed-projeto" title="Projeto vinculado">
         <option value="">— sem projeto —</option>
         ${projetos.filter(p => p.status !== "arquivado" || p.id === L.projetoId)
           .map(p => `<option value="${p.id}" ${p.id === L.projetoId ? "selected" : ""}>${esc(p.nome)}${p.status === "arquivado" ? " (arquivado)" : ""}</option>`).join("")}
       </select>
-    </div>
-    <div class="be-linha">
-      <label class="be-autor" title="Quem criou/responde por esta lista">Autor:
+      <label class="ed-rot" title="Quem criou/responde por esta lista">Autor
         <select id="ed-autor">
           <option value="" ${!L.autor ? "selected" : ""}>— não definido —</option>
           ${[...new Set([...pessoas.map(p => p.nome), ...(L.autor ? [L.autor] : [])])].sort()
             .map(n => `<option ${n === L.autor ? "selected" : ""}>${esc(n)}</option>`).join("")}
         </select>
       </label>
-      <button class="btn sec" id="btn-status">${L.status === "concluida" ? "✅ Concluída" : "🕓 Em andamento"}</button>
-      <button class="btn sec" id="btn-salvar">✓ Salvo</button>
+      <span class="ed-sep"></span>
+      <button class="btn sec ed-status" id="btn-status"></button>
+      <button class="ed-salvo" id="ed-salvo" data-estado="salvo" title="Clique para salvar agora"></button>
       <span class="espacador"></span>
-      <a class="btn sec" href="#/">← Voltar</a>
       <button class="btn sec" id="btn-imprimir">🖨️ Imprimir</button>
       <button class="btn" id="btn-pdf">📤 PDF</button>
+      <a class="btn sec" href="#/">← Voltar</a>
     </div>
-    <details class="be-notas">
-      <summary>📝 Anotações internas (não saem no PDF)</summary>
-      <textarea id="ed-anotacoes" placeholder="Anotações gerais desta lista…">${esc(L.anotacoes || "")}</textarea>
-    </details>
+
+    <div class="ed-trava no-print" id="ed-trava" hidden>
+      <span>🔒 <strong>Requisição concluída</strong> — somente leitura. Impressão e PDF continuam disponíveis.</span>
+      <button class="btn mini" id="btn-reabrir">Reabrir para edição</button>
+    </div>
+
+    <div class="ed-corpo ${localStorage.getItem("rq.latFechada") === "1" ? "lat-fechada" : ""}">
+      <aside class="ed-lateral no-print">
+        <div class="lat-abas">
+          <button class="lat-aba" data-aba="itens" title="Adicionar material (Ctrl+K)"><span class="ico">🔎</span><span class="rot">Itens</span></button>
+          <button class="lat-aba" data-aba="notas" title="Anotações internas"><span class="ico">📝</span><span class="rot">Anotações</span></button>
+          <button class="lat-aba" data-aba="hist" title="Histórico de edições salvas"><span class="ico">🕘</span><span class="rot">Histórico</span></button>
+          <span class="espacador"></span>
+          <button class="lat-recolher" id="lat-recolher" title="Recolher / expandir o painel">«</button>
+        </div>
+        <div class="lat-conteudo">
+          <section class="lat-painel lat-itens" data-painel="itens">
+            <div class="busca-linha">
+              <input type="text" id="busca" placeholder="Descrição ou código… (Enter adiciona o 1º)" autocomplete="off">
+            </div>
+            <div class="busca-opcoes">
+              <label><input type="checkbox" id="opt-espacos" checked> Ignorar espaços/traços</label>
+              <button class="btn sec mini" id="btn-avulso">+ Item avulso (S/ CÓD.)</button>
+            </div>
+            <p class="trava-dica">🔒 Inclusão de itens bloqueada: a requisição está concluída.</p>
+            <div id="resultados"></div>
+            <div class="contagem" id="contagem"></div>
+            <div class="dica">Vários termos = todos precisam aparecer, em qualquer ordem.
+              Ex.: <em>cabo pp 4x2,5</em>. Acentos são ignorados. Amarelo = já usado antes; preço em verde vem do histórico.
+              <strong>Ctrl+K</strong> volta para a busca de qualquer ponto.</div>
+          </section>
+          <section class="lat-painel" data-painel="notas" hidden>
+            <p class="lat-sub">Anotações internas desta lista — não saem no PDF.</p>
+            <textarea id="ed-anotacoes" class="lat-notas" placeholder="Anotações gerais desta lista…">${esc(L.anotacoes || "")}</textarea>
+          </section>
+          <section class="lat-painel" data-painel="hist" hidden>
+            <p class="lat-sub">Somente alterações efetivamente salvas. Edições seguidas da mesma pessoa são agrupadas.</p>
+            <div id="historico"></div>
+          </section>
+        </div>
+      </aside>
+
+      <section class="ed-direita">
+        <div class="mesa-barra no-print">
+          <span class="ed-ultima" id="ed-ultima"></span>
+          <span class="espacador"></span>
+          <span class="zoom-ctl">
+            <button class="btn mini sec" id="zoom-menos" title="Diminuir (Ctrl + roda do mouse)">−</button>
+            <span id="zoom-val">100%</span>
+            <button class="btn mini sec" id="zoom-mais" title="Aumentar (Ctrl + roda do mouse)">+</button>
+            <button class="btn mini sec zoom-modo" data-modo="largura" title="Ajustar à largura disponível">↔ Largura</button>
+            <button class="btn mini sec zoom-modo" data-modo="pagina" title="Mostrar a página inteira">▢ Página</button>
+          </span>
+          <span class="total-vivo" id="total-vivo"></span>
+        </div>
+        <div class="ed-mesa" id="ed-mesa"><div class="folha" id="folha"></div></div>
+      </section>
+    </div>
   </div>
+  <datalist id="dl-setores">${setoresNum.map(s => `<option value="${esc(s.nome)}"></option>`).join("")}</datalist>`;
 
-  <div class="editor">
-    <aside class="painel no-print">
-      <h2>Adicionar material</h2>
-      <div class="busca-linha">
-        <input type="text" id="busca" placeholder="Digite parte da descrição ou código… (Enter adiciona o 1º)" autocomplete="off">
-      </div>
-      <div class="busca-opcoes">
-        <label><input type="checkbox" id="opt-espacos" checked> Ignorar espaços/traços (2,5MM = 2,5 MM)</label>
-      </div>
-      <div id="resultados"></div>
-      <div class="contagem" id="contagem"></div>
-      <button class="btn sec mini" id="btn-avulso" style="margin-top:8px">+ Item avulso (S/ CÓD.)</button>
-      <div class="dica">Vários termos = todos precisam aparecer, em qualquer ordem.
-      Ex.: <em>cabo pp 4x2,5</em>. Acentos são ignorados automaticamente.
-      Amarelo = já usado antes; preço em verde vem do histórico.</div>
-    </aside>
+  const chip = $("#ed-salvo"), elUltima = $("#ed-ultima"), elHist = $("#historico");
+  const corpo = $(".ed-corpo");
 
-    <div class="folha-envolve">
-      <div class="folha-barra no-print">
-        <span class="zoom-ctl">
-          <button class="btn mini sec" id="zoom-menos" title="Diminuir">−</button>
-          <span id="zoom-val">100%</span>
-          <button class="btn mini sec" id="zoom-mais" title="Aumentar">+</button>
-          <button class="btn mini sec" id="zoom-ajustar" title="Ajustar à largura da tela">Ajustar</button>
-        </span>
-        <span class="total-vivo" id="total-vivo"></span>
-      </div>
-      <div class="folha-rolagem"><div class="folha" id="folha"></div></div>
-    </div>
-  </div>`;
+  /* ---------- salvamento + log de edição ----------
+     Rascunho local a cada alteração; "salvo" de verdade 0,9 s depois de parar
+     de digitar, quando a nuvem confirma (ou na hora, no modo local).
+     Só nesse momento a alteração entra no histórico. */
+  let base = null;                   // última versão confirmada (referência do diff)
+  let tNuvem = null;
+  let fila = Promise.resolve();      // salvamentos em série: evita entradas duplicadas
+  const fotografar = () => { const c = JSON.parse(JSON.stringify(L)); delete c.log; return c; };
+  const TXT_SALVO = { salvo: "✓ Salvo", pendente: "● Não salvo", salvando: "Salvando…", erro: "⚠ Falha ao salvar — tentar de novo" };
+  function marcar(estado) { chip.textContent = TXT_SALVO[estado]; chip.dataset.estado = estado; }
+  function salvar() {
+    salvarTudo();                    // rascunho local imediato
+    marcar("pendente");
+    clearTimeout(tNuvem);
+    tNuvem = setTimeout(commit, 900);
+  }
+  function commit() {
+    clearTimeout(tNuvem); tNuvem = null;
+    fila = fila.then(efetivar, efetivar);
+    return fila;
+  }
+  async function efetivar() {
+    if (!base) return true;
+    const mud = diffLista(base, L);
+    if (!mud.length) { salvarTudo(); if (!tNuvem) marcar("salvo"); return true; }
+    marcar("salvando");
+    const snap = fotografar();
+    const desfazer = registrarLog(L, mud);
+    salvarTudo();
+    const ok = await nuvemSalvarLista(L);
+    if (!ok) { desfazer(); salvarTudo(); marcar("erro"); return false; }
+    base = snap;
+    if (!tNuvem) marcar(diffLista(base, L).length ? "pendente" : "salvo");
+    mostrarUltima(); desenharHistorico();
+    return true;
+  }
+  function mostrarUltima() {
+    const u = ultimaEdicao(L);
+    elUltima.innerHTML = u
+      ? `Última edição salva: <strong>${esc(dataHoraBR(u.em))}</strong> · ${esc(u.por)}`
+      : "Nenhuma edição salva registrada ainda";
+  }
+  function desenharHistorico() {
+    const log = (L.log || []).slice().reverse();
+    if (!log.length) { elHist.innerHTML = `<div class="dica">Ainda não há edições salvas nesta lista.</div>`; return; }
+    elHist.innerHTML = log.map(e => {
+      const ms = e.mudancas || [];
+      const li = (arr) => arr.map(m => `<li>${htmlMudanca(m)}</li>`).join("");
+      return `<div class="lg-entrada${e.marco ? " marco" : ""}">
+        <div class="lg-cab"><strong>${esc(faixaLog(e))}</strong><span>${esc(e.por)}</span></div>
+        ${ms.length ? `<ul>${li(ms.slice(0, 8))}</ul>` : ""}
+        ${ms.length > 8 ? `<details><summary>+ ${ms.length - 8} alteração(ões)</summary><ul>${li(ms.slice(8))}</ul></details>` : ""}
+      </div>`;
+    }).join("");
+  }
+
+  /* ---------- status e bloqueio de requisição concluída ---------- */
+  function aplicarTrava() {
+    const t = travada();
+    $(".ed").classList.toggle("travada", t);
+    $("#ed-trava").hidden = !t;
+    const bs = $("#btn-status");
+    bs.textContent = t ? "✅ Concluída" : "🕓 Em andamento";
+    bs.classList.toggle("concluida", t);
+    bs.title = t ? "Concluída — clique para reabrir" : "Clique para marcar como concluída";
+    ["#ed-titulo", "#ed-projeto", "#ed-autor", "#ed-anotacoes", "#busca", "#opt-espacos", "#btn-avulso"]
+      .forEach(s => { const el = $(s); if (el) el.disabled = t; });
+    if (t) { $("#busca").value = ""; resultadosAtuais = []; desenharResultados(); }
+  }
+  async function trocarStatus() {
+    if (travada()) {
+      if (!confirm("Esta requisição está CONCLUÍDA e bloqueada para edição.\n\n"
+        + "Para editar, o status voltará para “Em andamento”. A reabertura fica registrada no histórico.\n\n"
+        + "Deseja reabrir a requisição?")) return;
+      L.status = "andamento";
+    } else {
+      if (!confirm("Marcar esta requisição como CONCLUÍDA?\n\n"
+        + "Ela ficará bloqueada para edição (impressão e PDF continuam liberados). "
+        + "Para alterá-la depois será preciso reabri-la.")) return;
+      L.status = "concluida";
+    }
+    desenharFolha();
+    aplicarTrava();
+    salvarTudo();
+    await commit();
+    toast(travada() ? "✅ Requisição concluída e bloqueada para edição" : "🔓 Requisição reaberta para edição");
+  }
+  let ultimoAviso = 0;
+  function avisarTrava() {
+    if (Date.now() - ultimoAviso < 2500) return;
+    ultimoAviso = Date.now();
+    toast("🔒 Requisição concluída — use “Reabrir para edição” para alterar.");
+  }
 
   /* ---------- barra do editor ---------- */
   $("#ed-titulo").oninput = (e) => { L.titulo = e.target.value; salvar(); };
@@ -1026,20 +1341,32 @@ function telaEditor(app, id) {
     if (!L.assinaturasManuais) desenharFolha();
     salvar();
   };
-  $("#btn-status").onclick = () => {
-    L.status = L.status === "concluida" ? "andamento" : "concluida";
-    $("#btn-status").textContent = L.status === "concluida" ? "✅ Concluída" : "🕓 Em andamento";
-    salvar();
-  };
-  $("#btn-salvar").onclick = async () => {
-    salvarTudo();
-    clearTimeout(tNuvem);
-    $("#btn-salvar").textContent = "Salvando…";
-    await nuvemSalvarLista(L);
-    marcarSalvo(true);
-  };
-  marcarSalvo(true);
+  $("#btn-status").onclick = trocarStatus;
+  $("#btn-reabrir").onclick = trocarStatus;
+  chip.onclick = () => { salvarTudo(); commit(); };
 
+  /* ---------- painel lateral: abas e recolher ---------- */
+  function selecionarAba(aba) {
+    $$(".lat-aba").forEach(b => b.classList.toggle("ativa", b.dataset.aba === aba));
+    $$(".lat-painel").forEach(p => { p.hidden = p.dataset.painel !== aba; });
+    sessionStorage.setItem("rq.latAba", aba);
+  }
+  function abrirAba(aba) {
+    corpo.classList.remove("lat-fechada");
+    localStorage.setItem("rq.latFechada", "");
+    selecionarAba(aba);
+  }
+  $$(".lat-aba").forEach(b => b.onclick = () => abrirAba(b.dataset.aba));
+  $("#lat-recolher").onclick = () => {
+    const fechar = !corpo.classList.contains("lat-fechada");
+    corpo.classList.toggle("lat-fechada", fechar);
+    localStorage.setItem("rq.latFechada", fechar ? "1" : "");
+  };
+  function focarBusca() {
+    abrirAba("itens");
+    const c = $("#busca");
+    if (c && !c.disabled) { c.focus(); c.select(); }
+  }
   /* imprime um CLONE textual do documento: datas viram texto (sem ícone de calendário
      cortando o ano), campos perdem o fundo amarelo e o PDF salvo é vetorial e pesquisável */
   function imprimirDocumento() {
@@ -1106,25 +1433,55 @@ function telaEditor(app, id) {
   /* exportar PDF = impressão vetorial salva como PDF (texto pesquisável, arquivo leve) */
   $("#btn-pdf").onclick = imprimirDocumento;
 
-  /* ---------- zoom da folha (celular e PC) ---------- */
-  let zoomManual = parseFloat(sessionStorage.getItem("rq.zoom") || "") || 0;   // 0 = ajustar à tela
+  /* ---------- zoom da folha: ajustar à largura (padrão), página inteira ou manual ---------- */
+  const mesa = $("#ed-mesa"), folhaEl = $("#folha");
+  const LARGURA_A4 = 1123;            // 297 mm em px CSS
+  let modoZoom = localStorage.getItem("rq.zoomModo") || "largura";
   function aplicarZoom() {
-    const f = $(".folha"); if (!f) return;
-    const larguraDisp = $(".folha-envolve").clientWidth - 4;
-    const fator = zoomManual || Math.min(1, larguraDisp / 1123);
-    f.style.zoom = fator;
-    $("#zoom-val").textContent = Math.round(fator * 100) + "%";
+    if (!folhaEl.isConnected) return;
+    const est = getComputedStyle(mesa);
+    const padH = parseFloat(est.paddingLeft) + parseFloat(est.paddingRight);
+    const padV = parseFloat(est.paddingTop) + parseFloat(est.paddingBottom);
+    const fitLarg = (mesa.clientWidth - padH) / LARGURA_A4;
+    let z;
+    if (modoZoom === "pagina" && window.innerWidth > 900) {
+      folhaEl.style.zoom = 1;
+      const h = folhaEl.offsetHeight || 794;
+      z = Math.min(fitLarg, (mesa.clientHeight - padV) / h);
+    } else if (modoZoom === "largura" || modoZoom === "pagina") {
+      z = fitLarg;
+    } else {
+      z = parseFloat(modoZoom) || 1;
+    }
+    z = Math.min(2.5, Math.max(0.3, z));
+    folhaEl.style.zoom = z.toFixed(3);
+    $("#zoom-val").textContent = Math.round(z * 100) + "%";
+    $$(".zoom-modo").forEach(b => b.classList.toggle("ativo", b.dataset.modo === modoZoom));
   }
-  const mudarZoom = (delta) => {
-    const atual = parseFloat($(".folha").style.zoom || 1);
-    zoomManual = Math.min(2, Math.max(0.3, atual + delta));
-    sessionStorage.setItem("rq.zoom", zoomManual);
+  function mudarZoom(delta) {
+    const atual = parseFloat(folhaEl.style.zoom) || 1;
+    modoZoom = String(Math.round(Math.min(2.5, Math.max(0.3, atual + delta)) * 100) / 100);
+    localStorage.setItem("rq.zoomModo", modoZoom);
     aplicarZoom();
-  };
+  }
   $("#zoom-menos").onclick = () => mudarZoom(-0.1);
   $("#zoom-mais").onclick = () => mudarZoom(+0.1);
-  $("#zoom-ajustar").onclick = () => { zoomManual = 0; sessionStorage.setItem("rq.zoom", ""); aplicarZoom(); };
-  window.addEventListener("resize", aplicarZoom);
+  $$(".zoom-modo").forEach(b => b.onclick = () => {
+    modoZoom = b.dataset.modo; localStorage.setItem("rq.zoomModo", modoZoom); aplicarZoom();
+  });
+  /* Ctrl + roda do mouse (ou pinça no touchpad) aproxima/afasta só a folha */
+  mesa.addEventListener("wheel", (e) => {
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    mudarZoom(Math.max(-0.1, Math.min(0.1, -e.deltaY * 0.0015)));
+  }, { passive: false });
+  /* reajusta quando a janela muda ou o painel lateral abre/fecha */
+  roZoom = new ResizeObserver(() => aplicarZoom());
+  roZoom.observe(mesa);
+  /* clique num campo travado: lembra como reabrir */
+  mesa.addEventListener("mousedown", (e) => {
+    if (travada() && e.target.closest("#folha input, #folha textarea, #folha select")) avisarTrava();
+  });
 
   /* ---------- busca ---------- */
   let selecionado = -1, resultadosAtuais = [];
@@ -1171,6 +1528,7 @@ function telaEditor(app, id) {
 
   function adicionarDoBanco(r) {
     if (!r) return;
+    if (travada()) { avisarTrava(); return; }
     const base = { codigo: r.c, descricao: r.d, un: r.u, preco: 0 };
     const ph = precoLembrado(base);
     if (ph) base.preco = ph;                    // puxa o último preço usado
@@ -1180,6 +1538,7 @@ function telaEditor(app, id) {
     caixa.select();
   }
   $("#btn-avulso").onclick = () => {
+    if (travada()) { avisarTrava(); return; }
     const d = prompt("Descrição do item avulso:");
     if (!d) return;
     const base = { codigo: "S/ CÓD.", descricao: d.trim().toUpperCase(), un: "pç", preco: 0 };
@@ -1196,12 +1555,13 @@ function telaEditor(app, id) {
     const t = e.target;
     if (!t.matches("input, select")) return;
     if (t.type === "date" || t.tagName === "SELECT") return;      // setas têm função própria nesses
+    if (t.getAttribute("list")) return;                           // campo com sugestões (setor): setas escolhem
     const dir = e.key === "ArrowUp" ? -1 : 1;                     // Enter desce, como no Excel
     const col = COLUNAS_NAV.find(k => t.dataset[k] !== undefined);
     let alvo = null;
     if (col) {                                                    // dentro da tabela: mesma coluna, linha ±1
       alvo = $(`#folha [data-${col}="${+t.dataset[col] + dir}"]`);
-      if (!alvo && dir === 1 && e.key === "Enter") { caixa.focus(); e.preventDefault(); return; }
+      if (!alvo && dir === 1 && e.key === "Enter") { if (!travada()) focarBusca(); e.preventDefault(); return; }
     } else {                                                      // cabeçalho: campo seguinte/anterior
       const campos = $$("#folha input, #folha textarea").filter(el => el.offsetParent);
       const i = campos.indexOf(t);
@@ -1222,6 +1582,10 @@ function telaEditor(app, id) {
     $("#folha").classList.toggle("mm", ehMM);
     if (ehMM) folhaMM(); else folhaRM();
     ligarEventosFolha();
+    if (travada()) {                                  // concluída: documento congelado
+      $$("#folha input, #folha textarea").forEach(el => { el.readOnly = true; });
+      $$("#folha select").forEach(el => { el.disabled = true; });
+    }
     aplicarZoom();
 
     if (foco) {
@@ -1238,7 +1602,7 @@ function telaEditor(app, id) {
   /* ===== folha RM: REQUISIÇÃO DE MATERIAL ===== */
   function folhaRM() {
     const total = totalDa(L);
-    if (!L.assinaturasManuais) L.assinaturas = assinaturasPorValor(total, L.solicitante);
+    if (!L.assinaturasManuais && !travada()) L.assinaturas = assinaturasPorValor(total, L.solicitante);
     $("#total-vivo").textContent = "Total: " + dinheiro(total);
 
     const linhaItem = (i, idx) => `
@@ -1302,7 +1666,7 @@ function telaEditor(app, id) {
       <tr>
         <td class="d-cent"><input type="date" data-l="data" value="${esc(L.data)}" style="text-align:center"></td>
         <td class="d-cent" colspan="2"><input data-l="solicitante" value="${esc(L.solicitante)}" style="text-align:center"></td>
-        <td class="d-cent"><input data-l="setor" value="${esc(L.setor)}" style="text-align:center"></td>
+        <td class="d-cent"><input data-l="setor" data-setor value="${esc(L.setor || "")}" list="dl-setores" inputmode="numeric" autocomplete="off" style="text-align:center"></td>
         <td class="d-cent"><input data-l="projetoNum" value="${esc(L.projetoNum)}" style="text-align:center"></td>
         <td class="d-cent"><input data-l="nrOS" value="${esc(L.nrOS)}" style="text-align:center"></td><td class="d-remover no-print"></td>
       </tr>
@@ -1345,7 +1709,7 @@ function telaEditor(app, id) {
      ESPECIFICAÇÃO 28% | UN 3,4% | MIN 6% | MAX 6% | CÓDIGO 6,5% | VALOR UN 7% | VALOR TOTAL 8,4% | JUSTIF. 34,7%
      Valor total da linha = QTDE MIN × VALOR UN (regra do próprio formulário). */
   function folhaMM() {
-    if (!L.assinaturasManuais) L.assinaturas = assinaturasMM(L);
+    if (!L.assinaturasManuais && !travada()) L.assinaturas = assinaturasMM(L);
     const total = totalDa(L);
     $("#total-vivo").textContent = "Soma (Qtde Mín × Valor Un): " + dinheiro(total);
 
@@ -1406,12 +1770,7 @@ function telaEditor(app, id) {
             <tr>
               <td style="width:49.7%" class="campo-linha"><span class="rotulo">SOLICITANTE:</span> <input data-l="solicitante" value="${esc(L.solicitante)}" style="width:calc(100% - 92px);display:inline-block"></td>
               <td class="rotulo" style="width:11.2%;text-align:center">SETOR:</td>
-              <td style="width:16.1%" class="d-cent">
-                <select data-l="setor" style="width:100%;background:#fffbe6;border:none;text-align:center;text-align-last:center">
-                  <option value="">— selecione —</option>
-                  ${setores.map(s => `<option ${s.nome === L.setor ? "selected" : ""}>${esc(s.nome)}</option>`).join("")}
-                </select>
-              </td>
+              <td style="width:16.1%" class="d-cent"><input data-l="setor" data-setor value="${esc(L.setor || "")}" list="dl-setores" inputmode="numeric" autocomplete="off" style="text-align:center"></td>
               <td style="width:11%" class="campo-linha"><span class="rotulo">DATA:</span><input type="date" data-l="data" value="${esc(L.data)}"></td>
               <td style="width:12%" class="campo-linha"><span class="rotulo">NR O.S.</span><input data-l="nrOS" value="${esc(L.nrOS || "")}"></td>
             </tr>
@@ -1478,7 +1837,16 @@ function telaEditor(app, id) {
   /* ===== eventos comuns da folha ===== */
   function ligarEventosFolha() {
     $$("#folha [data-l]").forEach(el => {
-      el.onchange = el.oninput = () => { L[el.dataset.l] = el.value; salvar(); };
+      const ehSetor = el.dataset.setor !== undefined;
+      if (ehSetor) marcarSetor(el);
+      el.onchange = el.oninput = () => {
+        if (ehSetor) {                                   // setor: só dígitos
+          const v = el.value.replace(/\D/g, "");
+          if (v !== el.value) el.value = v;
+          marcarSetor(el);
+        }
+        L[el.dataset.l] = el.value; salvar();
+      };
       if (el.dataset.l === "solicitante") {
         el.onblur = () => { if (!L.assinaturasManuais) desenharFolha(); };   // 1º visto = solicitante
       }
@@ -1522,7 +1890,14 @@ function telaEditor(app, id) {
   }
 
   desenharFolha();
-  caixa.focus();
+  base = fotografar();                 // referência do log: a lista como foi aberta
+  aplicarTrava();
+  marcar("salvo");
+  mostrarUltima();
+  desenharHistorico();
+  selecionarAba(["itens", "notas", "hist"].includes(abaInicial) ? abaInicial : "itens");
+  editorAtivo = { commit, focarBusca };
+  if (!travada() && !corpo.classList.contains("lat-fechada")) caixa.focus();
 }
 
 function baixarBlob(blob, nome) {

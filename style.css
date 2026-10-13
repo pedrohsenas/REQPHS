@@ -3,6 +3,7 @@
    Paleta ancorada nas cores reais do logotipo Lar:
    vermelho #e51a41 · grafite #444344 · Calibri no documento.
    Os blocos FOLHA / MODO PDF / IMPRESSÃO ficam intocados.
+   Editor em tela cheia: ver bloco EDITOR (só @media screen).
    ============================================================ */
 :root{
   /* marca */
@@ -102,6 +103,7 @@ main#app{max-width:1500px; margin:0 auto; padding:22px 20px}
 .cartao .valor{font-weight:700; font-variant-numeric:tabular-nums}
 .cartao.projeto{border-left-color:var(--grafite)}
 .cartao.concluida{background:var(--verde-suave); border-left-color:var(--verde)}
+.cartao .sub.ult{font-size:11.5px; font-variant-numeric:tabular-nums}
 .etiqueta{
   display:inline-block; background:var(--fundo); border:1px solid var(--linha);
   border-radius:20px; padding:2px 10px; font-size:11px; color:var(--cinza); font-weight:500;
@@ -122,22 +124,95 @@ table.app tbody tr:hover td{background:var(--fundo)}
 table.app tr:last-child td{border-bottom:none}
 .num{text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap}
 
-/* ---------- editor: duas colunas ---------- */
-.editor{display:grid; grid-template-columns:400px minmax(0,1fr); gap:18px; align-items:start}
-@media (max-width:1100px){ .editor{grid-template-columns:1fr} }
+/* ============================================================
+   EDITOR — casca de tela cheia
+   Barra fina no topo, painel lateral recolhível e a folha numa
+   "mesa" que ocupa o resto da tela, com rolagem própria.
+   (Só tela: impressão/PDF usam o clone e não passam por aqui.)
+   ============================================================ */
+body.pg-editor main#app{max-width:none; width:100%; margin:0; padding:0}
+.ed{display:flex; flex-direction:column; min-height:0; --mesa:#d9d8dd}
 
-.painel{
-  background:var(--branco); border:1px solid var(--linha); border-radius:var(--raio);
-  box-shadow:var(--sombra); padding:14px; position:sticky; top:64px;
-  max-height:calc(100vh - 84px); display:flex; flex-direction:column;
+/* barra superior */
+.ed-barra{
+  display:flex; align-items:center; gap:8px; flex-wrap:wrap; flex:none;
+  background:var(--branco); border-bottom:1px solid var(--linha); padding:8px 14px;
 }
-@media (max-width:1100px){ .painel{position:static; max-height:none} }
-.painel h2{margin:0 0 10px; font-size:14px; color:var(--grafite); letter-spacing:-.01em}
+.ed-tipo{background:var(--grafite); color:#fff; font-weight:800; font-size:12px; border-radius:var(--raio-mini); padding:7px 10px; letter-spacing:.05em}
+input.ed-titulo{flex:1 1 240px; min-width:160px; font-size:15px; font-weight:700; padding:6px 10px}
+.ed-barra select{font-size:12.5px; padding:6px 8px; max-width:220px}
+#ed-projeto{min-width:150px}
+.ed-rot{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--cinza); white-space:nowrap}
+.ed-sep{width:1px; height:24px; background:var(--linha); margin:0 2px}
+.ed-barra .btn{padding:7px 12px}
+.ed-status.concluida{background:var(--verde-suave); color:var(--verde); border-color:var(--verde)}
+.ed-status.concluida:hover{background:#d8ecdf; border-color:var(--verde)}
+
+/* indicador de salvamento */
+.ed-salvo{
+  border:1px solid var(--linha); background:var(--fundo); color:var(--cinza);
+  border-radius:20px; padding:6px 12px; font-family:inherit; font-size:12px; font-weight:600;
+  cursor:pointer; white-space:nowrap; transition:background .15s, color .15s;
+}
+.ed-salvo[data-estado=salvo]{background:var(--verde-suave); color:var(--verde); border-color:#b9dcc5}
+.ed-salvo[data-estado=pendente]{background:var(--amarelo-suave); color:#7d6200; border-color:#ead98f}
+.ed-salvo[data-estado=salvando]{background:var(--fundo); color:var(--cinza)}
+.ed-salvo[data-estado=erro]{background:var(--vermelho-suave); color:var(--vermelho-escuro); border-color:#f3c2ca}
+
+/* faixa de requisição concluída (somente leitura) */
+.ed-trava{
+  display:flex; align-items:center; gap:12px; flex-wrap:wrap; flex:none;
+  padding:8px 14px; background:#e6f3ea; border-bottom:1px solid #b9dcc5; color:#175e35; font-size:13px;
+}
+.ed-trava[hidden]{display:none}
+.ed-trava .btn{background:var(--verde)}
+.ed-trava .btn:hover{background:#17633a}
+
+/* corpo: painel | mesa */
+.ed-corpo{display:grid; grid-template-columns:380px minmax(0,1fr); grid-template-rows:minmax(0,1fr); min-height:0}
+.ed-corpo.lat-fechada{grid-template-columns:46px minmax(0,1fr)}
+@media (max-width:1500px){ .ed-corpo:not(.lat-fechada){grid-template-columns:340px minmax(0,1fr)} }
+
+/* painel lateral */
+.ed-lateral{background:var(--branco); border-right:1px solid var(--linha); display:flex; flex-direction:column; min-height:0; min-width:0; overflow:hidden}
+.lat-abas{display:flex; align-items:center; gap:2px; padding:6px 8px 0; border-bottom:1px solid var(--linha); flex:none}
+.lat-aba{
+  display:flex; align-items:center; gap:6px; border:none; background:none; cursor:pointer;
+  font-family:inherit; font-size:12.5px; font-weight:600; color:var(--cinza);
+  padding:8px 10px 9px; margin-bottom:-1px; border-bottom:2px solid transparent;
+  border-radius:var(--raio-mini) var(--raio-mini) 0 0;
+}
+.lat-aba:hover{color:var(--tinta); background:var(--fundo)}
+.lat-aba.ativa{color:var(--vermelho); border-bottom-color:var(--vermelho)}
+.lat-aba .ico{font-size:14px; line-height:1}
+.lat-recolher{
+  width:28px; height:28px; margin-bottom:5px; flex:none; cursor:pointer;
+  border:1px solid var(--linha); background:#fff; border-radius:var(--raio-mini);
+  color:var(--cinza); font-size:16px; line-height:1;
+}
+.lat-recolher:hover{color:var(--tinta); border-color:var(--cinza-claro)}
+.lat-conteudo{flex:1; min-height:0; overflow:auto; padding:12px}
+.lat-painel[hidden]{display:none !important}
+.lat-itens{display:flex; flex-direction:column; height:100%; min-height:0}
+.lat-sub{font-size:12px; color:var(--cinza); margin:0 0 10px; line-height:1.5}
+textarea.lat-notas{width:100%; min-height:260px; resize:vertical; line-height:1.5}
+
+/* painel recolhido: trilho fino só com ícones */
+.ed-corpo.lat-fechada .lat-conteudo{display:none}
+.ed-corpo.lat-fechada .lat-abas{flex-direction:column; padding:8px 0; gap:6px; border-bottom:none}
+.ed-corpo.lat-fechada .lat-abas .espacador{display:none}
+.ed-corpo.lat-fechada .lat-aba{padding:8px; margin:0; border-bottom:none; border-radius:var(--raio-mini)}
+.ed-corpo.lat-fechada .lat-aba .rot{display:none}
+.ed-corpo.lat-fechada .lat-aba.ativa{color:var(--cinza)}
+.ed-corpo.lat-fechada .lat-recolher{order:-1; transform:scaleX(-1); margin:0 0 4px}
+
+/* busca de itens */
 .busca-linha{display:flex; gap:8px}
-.busca-linha input{flex:1}
-.busca-opcoes{display:flex; gap:14px; flex-wrap:wrap; margin:8px 0 4px; font-size:12px; color:var(--cinza)}
+.busca-linha input{flex:1; min-width:0}
+.busca-opcoes{display:flex; gap:10px; flex-wrap:wrap; justify-content:space-between; align-items:center; margin:8px 0 4px; font-size:12px; color:var(--cinza)}
 .busca-opcoes label{display:flex; gap:5px; align-items:center; cursor:pointer}
 #resultados{overflow-y:auto; margin-top:8px; border-top:1px solid var(--linha)}
+.lat-itens #resultados{flex:1; min-height:120px}
 .resultado{
   padding:8px 6px; border-bottom:1px solid var(--fundo); cursor:pointer;
   display:flex; gap:10px; align-items:baseline;
@@ -145,7 +220,7 @@ table.app tr:last-child td{border-bottom:none}
 .resultado:hover, .resultado.ativo{background:var(--vermelho-suave)}
 .resultado.usado{background:var(--amarelo-suave)}                 /* já usado em requisições */
 .resultado.usado:hover, .resultado.usado.ativo{background:#ffefad}
-.resultado .cod{font-weight:700; font-size:12px; color:var(--vermelho); min-width:64px; font-variant-numeric:tabular-nums}
+.resultado .cod{font-weight:700; font-size:12px; color:var(--vermelho); min-width:58px; font-variant-numeric:tabular-nums}
 .resultado .desc{flex:1; font-size:13px; line-height:1.4}
 .resultado .un{font-size:11px; color:var(--cinza)}
 .resultado .preco-hist{font-size:11px; color:var(--verde); white-space:nowrap; font-variant-numeric:tabular-nums}
@@ -158,6 +233,69 @@ table.app tr:last-child td{border-bottom:none}
 .resultado .lupa.verde{background:var(--verde-suave); border-color:var(--verde); color:var(--verde); font-weight:700}
 .contagem{font-size:11px; color:var(--cinza); margin-top:6px}
 .dica{font-size:12px; color:var(--cinza); background:var(--fundo); border-radius:var(--raio-mini); padding:9px 11px; margin-top:10px; line-height:1.5}
+.trava-dica{display:none; font-size:12px; color:#175e35; background:#e6f3ea; border-radius:var(--raio-mini); padding:9px 11px; margin:10px 0 0; line-height:1.5}
+
+/* histórico de edições */
+.lg-entrada{border-left:3px solid var(--linha); padding:2px 0 2px 11px; margin-bottom:14px}
+.lg-entrada:first-child{border-left-color:var(--vermelho)}
+.lg-entrada.marco{border-left-color:var(--verde)}
+.lg-entrada.marco .lg-cab strong::before{content:"● "; color:var(--verde)}
+.lg-cab{display:flex; flex-direction:column; gap:1px; font-size:12px; color:var(--cinza)}
+.lg-cab strong{color:var(--tinta); font-size:12.5px; font-variant-numeric:tabular-nums}
+.lg-entrada ul{margin:6px 0 0; padding-left:16px; font-size:12px; line-height:1.55}
+.lg-entrada details{font-size:12px; margin-top:2px}
+.lg-entrada summary{cursor:pointer; color:var(--cinza)}
+.lg-de{color:var(--cinza); text-decoration:line-through}
+.lg-add{color:var(--verde); font-weight:700}
+.lg-rem{color:var(--vermelho); font-weight:700}
+
+/* lado direito: barra da folha + mesa */
+.ed-direita{display:flex; flex-direction:column; min-width:0; min-height:0}
+.mesa-barra{
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap; flex:none;
+  padding:6px 14px; background:var(--branco); border-bottom:1px solid var(--linha);
+  font-size:12px; color:var(--cinza);
+}
+.ed-ultima strong{color:var(--tinta); font-weight:600; font-variant-numeric:tabular-nums}
+.zoom-ctl{display:flex; gap:5px; align-items:center}
+#zoom-val{font-size:12px; color:var(--cinza); min-width:40px; text-align:center; font-variant-numeric:tabular-nums}
+.zoom-modo.ativo{background:var(--grafite); color:#fff; border-color:var(--grafite)}
+.zoom-modo.ativo:hover{background:var(--tinta); border-color:var(--tinta)}
+.mesa-barra .total-vivo{font-weight:700; font-size:14px; color:var(--tinta); font-variant-numeric:tabular-nums; margin-left:6px}
+.ed-mesa{flex:1; min-height:0; background:var(--mesa); padding:18px; scrollbar-gutter:stable}
+.ed-mesa .folha{margin:0 auto}
+
+/* campo SETOR fora do cadastro (só na tela) */
+.folha input.fora-cadastro{outline:1.5px dashed #d99a00; outline-offset:-2px}
+
+/* requisição concluída: folha congelada */
+.ed.travada{--mesa:#d3ddd6}
+.ed.travada .folha input, .ed.travada .folha textarea{background:transparent !important; cursor:default}
+.ed.travada .folha input:focus, .ed.travada .folha textarea:focus{outline:none; box-shadow:none}
+.ed.travada .folha > .no-print{display:none}
+.ed.travada .folha textarea{resize:none}
+.ed.travada .folha td.d-remover button, .ed.travada .folha .d-ass-troca, .ed.travada #btn-auto-ass{display:none}
+.ed.travada .trava-dica{display:block}
+.ed.travada #resultados, .ed.travada .lat-itens .dica{display:none}
+
+/* aviso flutuante */
+.toast{
+  position:fixed; left:50%; bottom:22px; transform:translate(-50%, 12px); opacity:0; pointer-events:none;
+  background:var(--grafite); color:#fff; padding:10px 18px; border-radius:22px;
+  font-size:13px; font-weight:500; box-shadow:var(--sombra-alta); z-index:300;
+  transition:opacity .2s, transform .2s;
+}
+.toast.visivel{opacity:1; transform:translate(-50%, 0)}
+
+/* tela grande: a página vira um app de altura fixa, cada área rola sozinha */
+@media screen and (min-width:901px){
+  body.pg-editor{height:100vh; height:100dvh; display:flex; flex-direction:column; overflow:hidden}
+  body.pg-editor #topo{flex:none}
+  body.pg-editor main#app{flex:1; min-height:0; display:flex; flex-direction:column}
+  body.pg-editor .ed{flex:1}
+  body.pg-editor .ed-corpo{flex:1}
+  .ed-mesa{overflow:auto}
+}
 
 /* ============================================================
    FOLHA — réplica fiel do PDF oficial (A4 PAISAGEM)
@@ -268,28 +406,6 @@ tr.d-item td.d-just{padding:1px 3px}
 td.d-remover{border:none !important; background:none; text-align:center; padding:0}
 td.d-remover button{border:none; background:none; color:var(--vermelho); cursor:pointer; font-size:13px; line-height:1}
 
-
-/* ---------- barra do editor ---------- */
-.barra-editor{background:var(--branco); border:1px solid var(--linha); border-radius:var(--raio);
-  box-shadow:var(--sombra); padding:12px 14px; margin-bottom:14px; display:flex; flex-direction:column; gap:9px}
-.be-linha{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
-.be-tipo{background:var(--grafite); color:#fff; font-weight:800; font-size:12px; border-radius:var(--raio-mini); padding:7px 10px; letter-spacing:.05em}
-.be-titulo{flex:1; min-width:200px; font-size:16px; font-weight:700}
-.be-autor{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--cinza); white-space:nowrap}
-.be-autor select{font-size:12px; padding:6px 8px; max-width:220px}
-#ed-projeto{min-width:170px}
-#btn-salvar.salvo{color:var(--verde); border-color:var(--verde); background:var(--verde-suave)}
-.be-notas summary{cursor:pointer; font-size:12px; color:var(--cinza); user-select:none}
-.be-notas summary:hover{color:var(--tinta)}
-.be-notas textarea{width:100%; min-height:70px; margin-top:8px}
-
-/* zoom da folha */
-.zoom-ctl{display:flex; gap:6px; align-items:center}
-#zoom-val{font-size:12px; color:var(--cinza); min-width:42px; text-align:center; font-variant-numeric:tabular-nums}
-.folha-barra{display:flex; gap:8px; align-items:center; flex-wrap:wrap; color:var(--cinza); font-size:13px}
-.folha-barra .total-vivo{font-weight:700; font-size:15px; margin-left:auto; color:var(--tinta); font-variant-numeric:tabular-nums}
-.folha-envolve{display:flex; flex-direction:column; gap:12px; min-width:0}
-.folha-rolagem{overflow-x:auto}
 
 /* ---------- resumo de projeto ---------- */
 .resumo-blocos{display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin-bottom:18px}
@@ -431,6 +547,7 @@ body.modo-pdf tr.d-item.zebra input{background:transparent}
 @media (max-width:900px){
   body{font-size:15px}
   main#app{padding:10px}
+  body.pg-editor main#app{padding:0}
   #topo{flex-wrap:wrap; row-gap:6px; padding:8px 10px}
   #topo nav{flex-wrap:wrap}
   .status-banco{margin-left:0; width:100%; order:9; font-size:11px}
@@ -438,26 +555,28 @@ body.modo-pdf tr.d-item.zebra input{background:transparent}
   .pagina-titulo h1 input{width:100%; min-width:0 !important}
   .pagina-titulo .btn{flex:1; text-align:center}
   .grade-cartoes{grid-template-columns:1fr}
+  .btn{padding:11px 14px}
 
-  .editor{grid-template-columns:1fr; gap:12px}
-  .painel{position:static; max-height:none}
+  /* editor empilhado: barra, painel, folha */
+  .ed-barra{padding:8px 10px}
+  input.ed-titulo{flex:1 1 100%}
+  .ed-barra .btn{flex:1; text-align:center; padding:10px 6px}
+  .ed-barra .espacador, .ed-sep{display:none}
+  #ed-projeto, .ed-rot{flex:1}
+  .ed-rot select{flex:1; max-width:none}
+  .ed-corpo, .ed-corpo.lat-fechada{display:block}
+  .ed-lateral{border-right:none; border-bottom:1px solid var(--linha)}
+  .ed-corpo.lat-fechada .lat-abas{flex-direction:row; padding:6px 8px}
+  .lat-conteudo{padding:10px}
+  .lat-itens{height:auto}
   #resultados{max-height:38vh}
+  .lat-itens #resultados{min-height:0}
   .resultado{padding:12px 6px}
   .resultado .lupa{padding:8px 10px; font-size:13px}
   .busca-linha input{font-size:16px}
-  .btn{padding:11px 14px}
-
-  .folha-rolagem{overflow-x:auto; -webkit-overflow-scrolling:touch; border-radius:6px;
-    margin:0 -10px; padding:0 10px}
-  .folha{margin:0}
-  .folha-barra{font-size:12px}
-
-  .barra-editor{padding:9px; margin:0 -2px 10px}
-  .be-titulo{width:100%; flex:1 1 100%}
-  .be-linha .btn{flex:1; text-align:center; padding:10px 6px}
-  .be-linha .espacador{display:none}
-  #ed-projeto{flex:1}
-  .painel{padding:10px}
   .dica{display:none}
-  .folha-envolve{gap:8px}
+  .mesa-barra{padding:6px 10px}
+  .ed-ultima{width:100%}
+  .zoom-modo[data-modo="pagina"]{display:none}
+  .ed-mesa{padding:8px; overflow-x:auto; -webkit-overflow-scrolling:touch}
 }
