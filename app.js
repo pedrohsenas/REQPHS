@@ -1,5 +1,5 @@
 /* ============================================================
-   Requisições UIS3 — app.js
+   Requisições UIS / UIS 3 — app.js
    Tudo roda no navegador: banco de itens no IndexedDB,
    listas/projetos/preços no localStorage. Nenhum servidor.
    ============================================================ */
@@ -7,19 +7,19 @@
 
 /* ---------------- pessoas (aba "Dados" do modelo) ---------------- */
 const PESSOAS_PADRAO = [
-  { nome: "Pedro Henrique Sena de Souza",   cargo: "Engenheiro Eletricista - UIS3" },
-  { nome: "Alexssandro Aparecido Benitez",  cargo: "Supervisor de Manutenção - UIS3" },
-  { nome: "Jaisson Aranha Machado",         cargo: "Gerente Industrial - UIS3" },
-  { nome: "Ademilson Freire da Silva",      cargo: "Gerente de Operações e Energias" },
-  { nome: "Mauro Cardoso de Souza",         cargo: "Gerente Industrial - UIS" },
-  { nome: "Ronnis Tarles Dantas Costa",     cargo: "PCM - UIS3" },
-  { nome: "Juliano Covo",                   cargo: "PCM - UIS3" },
-  { nome: "Marcia Pereira Paz",             cargo: "PCM - UIS3" },
-  { nome: "Luiz Ricardo de Oliveira Silva", cargo: "Coordenador de Manutenção" },
-  { nome: "Eberson Mariano da Roza",        cargo: "Supervisor de Produção - UIS3" },
+  { nome: "Pedro Henrique Sena de Souza",   cargo: "Engenheiro Eletricista - UIS3",    unidade: "UIS3" },
+  { nome: "Alexssandro Aparecido Benitez",  cargo: "Supervisor de Manutenção - UIS3",  unidade: "UIS3" },
+  { nome: "Jaisson Aranha Machado",         cargo: "Gerente Industrial - UIS3",        unidade: "UIS3" },
+  { nome: "Ademilson Freire da Silva",      cargo: "Gerente de Operações e Energias",  unidade: "TODOS" },
+  { nome: "Mauro Cardoso de Souza",         cargo: "Gerente Industrial - UIS",         unidade: "UIS" },
+  { nome: "Ronnis Tarles Dantas Costa",     cargo: "PCM - UIS3",                       unidade: "UIS3" },
+  { nome: "Juliano Covo",                   cargo: "PCM - UIS3",                       unidade: "UIS3" },
+  { nome: "Marcia Pereira Paz",             cargo: "PCM - UIS3",                       unidade: "UIS3" },
+  { nome: "Luiz Ricardo de Oliveira Silva", cargo: "Coordenador de Manutenção",        unidade: "TODOS" },
+  { nome: "Eberson Mariano da Roza",        cargo: "Supervisor de Produção - UIS3",    unidade: "UIS3" },
 ].map((p, i) => ({ id: "padrao-" + (i + 1), email: "", ...p }));
 
-/* cadastros editáveis (tela "Cadastros"): assinantes e setores */
+/* cadastros editáveis (tela "Cadastros"): assinantes e setores — cada um com unidade */
 let pessoas = null;   // carregado após LS existir (abaixo)
 let setores = null;
 const P = {
@@ -29,28 +29,143 @@ const P = {
   ademilson: "Ademilson Freire da Silva",
 };
 
-/* Regras de alçada de assinatura por valor total.
-   O 1º visto é sempre o SOLICITANTE da própria requisição (quem criou);
-   acima de R$ 30 mil o documento sobe para as gerências. */
-function assinaturasPorValor(total, solicitante) {
-  const quem = solicitante || P.pedro;
-  if (total <= 5000)  return [quem, P.alex];                  // supervisor
-  if (total <= 30000) return [quem, P.alex, P.jaisson];       // + gerente industrial
-  return [P.alex, P.jaisson, P.ademilson];                    // gerente corporativo
+/* ============================================================
+   UNIDADES — dois sistemas paralelos (UIS e UIS 3) sobre o
+   mesmo banco de itens, a mesma memória de preços e o mesmo layout.
+   · requisições e projetos pertencem a UMA unidade;
+   · pessoas e setores: "UIS", "UIS3" ou "TODOS" (comuns às duas,
+     ex.: gerentes e coordenadores);
+   · cada unidade só enxerga o que é dela + os comuns.
+   A unidade em uso vai na URL (?u=uis3 / ?u=uis), então dá para
+   ter as duas abertas em abas lado a lado. Quem está vinculado pelo
+   e-mail a uma unidade só fica preso a ela; "Todos" pode alternar.
+   ============================================================ */
+const TODOS = "TODOS";
+const UNIDADES = {
+  UIS3: { id: "UIS3", nome: "UIS 3", sigla: "UIS3", local: "185 - UIS 3",
+          padrao: { solicitante: P.pedro, supervisor: P.alex, gerente: P.jaisson, corporativo: P.ademilson } },
+  UIS:  { id: "UIS",  nome: "UIS",   sigla: "UIS",  local: "UIS",          // ← trocar pelo código do LOCAL da UIS (ex.: "1xx - UIS")
+          padrao: { solicitante: "", supervisor: "", gerente: "Mauro Cardoso de Souza", corporativo: P.ademilson } },
+};
+const OPCOES_UNIDADE = [["UIS", "UIS"], ["UIS3", "UIS 3"], [TODOS, "Todos"]];
+const nomeUnidade = (u) => u === TODOS ? "Todos" : (UNIDADES[u] || UNIDADES.UIS3).nome;
+let UN = "UIS3";                                    // unidade em uso nesta aba
+const UNI = () => UNIDADES[UN];
+
+/* "uis 3" / "UIS3" / "todos" → código; vazio se não reconhecer */
+const valorUnidade = (v) => {
+  const u = String(v || "").toUpperCase().replace(/[\s_-]/g, "");
+  return (UNIDADES[u] || u === TODOS) ? u : "";
+};
+/* listas e projetos sem unidade vêm da época em que só existia a UIS 3 */
+const unidadeDoRegistro = (r) => { const u = valorUnidade(r && r.unidade); return UNIDADES[u] ? u : "UIS3"; };
+const unidadeDoSetor = (s) => valorUnidade(s && s.unidade) || "UIS3";
+/* pessoa sem unidade gravada: sugere pela função (cargo) */
+function unidadeSugerida(p) {
+  const c = norm(p && p.cargo);
+  if (/\bUIS\s*-?\s*3\b/.test(c)) return "UIS3";
+  if (/\bUIS\b/.test(c)) return "UIS";
+  if (/GERENTE|COORDENADOR|DIRETOR|SUPERINTENDENTE/.test(c)) return TODOS;
+  return "UIS3";
+}
+const unidadeDaPessoa = (p) => valorUnidade(p && p.unidade) || unidadeSugerida(p);
+const naUnidade = (u, un = UN) => u === un || u === TODOS;
+const pessoasUN  = (un = UN) => (pessoas || PESSOAS_PADRAO).filter(p => naUnidade(unidadeDaPessoa(p), un));
+const setoresUN  = (un = UN) => (setores || []).filter(s => naUnidade(unidadeDoSetor(s), un));
+const projetosUN = (un = UN) => projetos.filter(p => unidadeDoRegistro(p) === un);
+const listasUN   = (un = UN) => listas.filter(l => unidadeDoRegistro(l) === un);
+
+/* quem pode alternar: pessoas "Todos" e quem não tem vínculo de login */
+const podeTrocarUnidade = () => !usuarioAtual || unidadeDaPessoa(usuarioAtual) === TODOS;
+const unidadeDaUrl = () => { const u = valorUnidade(new URLSearchParams(location.search).get("u")); return UNIDADES[u] ? u : ""; };
+function resolverUnidade() {
+  const fixa = usuarioAtual ? unidadeDaPessoa(usuarioAtual) : TODOS;
+  if (UNIDADES[fixa]) return fixa;
+  const salva = valorUnidade(localStorage.getItem("rq.unidade"));
+  return unidadeDaUrl() || (UNIDADES[salva] ? salva : "UIS3");
+}
+function gravarUnidadeNaUrl(u) {
+  try {
+    localStorage.setItem("rq.unidade", u);
+    const url = new URL(location.href);
+    if (url.searchParams.get("u") !== u.toLowerCase()) { url.searchParams.set("u", u.toLowerCase()); history.replaceState(null, "", url); }
+  } catch { /* file:// ou modo privado: segue só em memória */ }
+}
+function aplicarUnidade() {
+  UN = resolverUnidade();
+  gravarUnidadeNaUrl(UN);
+  desenharMarca();
+}
+/* abre um registro de outra unidade: troca sozinho (se puder) ou volta ao início */
+function garantirUnidade(u) {
+  if (u === UN) return true;
+  if (podeTrocarUnidade()) {
+    UN = u; gravarUnidadeNaUrl(u); desenharMarca();
+    toast(`Unidade trocada para ${nomeUnidade(u)}`);
+    return true;
+  }
+  toast("Esse registro pertence a outra unidade.");
+  location.hash = "#/";
+  return false;
+}
+/* troca pelo seletor do topo */
+function trocarUnidade(u) {
+  if (!UNIDADES[u] || u === UN || !podeTrocarUnidade()) return;
+  gravarUnidadeNaUrl(u);
+  if (/^#\/(lista|projeto)\//.test(location.hash)) location.hash = "#/";   // a tela aberta era da outra unidade
+  else render();
+}
+function desenharMarca() {
+  const nome = UNI().nome;
+  document.title = "Recursos Materiais " + nome;
+  document.body.dataset.unidade = UN;
+  const lt = $("#login-titulo"); if (lt) lt.textContent = "Recursos Materiais " + nome;
+  const ctl = $("#unidade-ctl"); if (!ctl) return;
+  const chave = UN + "|" + podeTrocarUnidade();
+  if (ctl.dataset.chave === chave) return;
+  ctl.dataset.chave = chave;
+  ctl.innerHTML = podeTrocarUnidade()
+    ? `<select id="sel-unidade" class="unidade-sel" title="Trocar de unidade — cada uma tem suas requisições, projetos e cadastros">
+        ${Object.values(UNIDADES).map(u => `<option value="${u.id}" ${u.id === UN ? "selected" : ""}>${u.nome}</option>`).join("")}
+      </select>`
+    : `<span class="unidade-chip" title="Sua unidade">${esc(nome)}</span>`;
+  const sel = $("#sel-unidade");
+  if (sel) sel.onchange = () => trocarUnidade(sel.value);
+}
+
+/* Regras de alçada de assinatura por valor total (iguais nas duas unidades).
+   O 1º visto é sempre o SOLICITANTE da própria requisição; os demais saem
+   pela FUNÇÃO no cadastro, entre as pessoas visíveis na unidade:
+   até R$ 5 mil → supervisor de manutenção; até R$ 30 mil → + gerente
+   industrial; acima → supervisor + gerente industrial + gerente de operações. */
+function papelNaUnidade(un, trecho, padrao) {
+  const t = norm(trecho);
+  const cand = pessoasUN(un).filter(p => norm(p.cargo).includes(t));
+  if (padrao && cand.some(p => p.nome === padrao)) return padrao;
+  const p = cand.find(x => unidadeDaPessoa(x) === un) || cand[0];
+  return p ? p.nome : (padrao || "");
+}
+function assinantesDaUnidade(un) {
+  const U = UNIDADES[un] || UNIDADES.UIS3;
+  return {
+    solicitante: U.padrao.solicitante,
+    supervisor:  papelNaUnidade(un, "SUPERVISOR DE MANUTEN", U.padrao.supervisor),
+    gerente:     papelNaUnidade(un, "GERENTE INDUSTRIAL", U.padrao.gerente),
+    corporativo: papelNaUnidade(un, "GERENTE DE OPERA", U.padrao.corporativo),
+  };
+}
+function assinaturasPorValor(total, solicitante, un = UN) {
+  const a = assinantesDaUnidade(un);
+  const quem = solicitante || a.solicitante;
+  if (total <= 5000)  return [quem, a.supervisor];                  // supervisor
+  if (total <= 30000) return [quem, a.supervisor, a.gerente];       // + gerente industrial
+  return [a.supervisor, a.gerente, a.corporativo];                  // gerente corporativo
 }
 const cargoDe = (nome) => ((pessoas || PESSOAS_PADRAO).find(p => p.nome === nome) || {}).cargo || "";
-const acharPorCargo = (trecho) => {
-  const t = trecho.toUpperCase();
-  const p = (pessoas || PESSOAS_PADRAO).find(x => String(x.cargo || "").toUpperCase().includes(t));
-  return p ? p.nome : "";
-};
 /* assinantes fixos do Cadastro de Mín/Máx: solicitante + supervisor + gerente industrial */
 function assinaturasMM(l) {
-  return [
-    l.solicitante || "",
-    acharPorCargo("SUPERVISOR DE MANUTENÇÃO") || P.alex,
-    acharPorCargo("GERENTE INDUSTRIAL - UIS3") || P.jaisson,
-  ].filter(Boolean);
+  const a = assinantesDaUnidade(unidadeDoRegistro(l));
+  return [l.solicitante || "", a.supervisor, a.gerente].filter(Boolean);
 }
 
 /* usuário logado (nuvem): vincula pelo e-mail do cadastro de assinantes */
@@ -91,9 +206,9 @@ const LS = {
   ler(chave, padrao) { try { return JSON.parse(localStorage.getItem(chave)) ?? padrao; } catch { return padrao; } },
   gravar(chave, v) { localStorage.setItem(chave, JSON.stringify(v)); },
 };
-let projetos = LS.ler("rq.projetos", []);   // [{id, nome}]
-pessoas = LS.ler("rq.pessoas", PESSOAS_PADRAO);          // [{id, nome, cargo, email}]
-setores = LS.ler("rq.setores", [{ id: "s1", nome: "9313" }]);  // [{id, nome}]
+let projetos = LS.ler("rq.projetos", []);   // [{id, nome, status, autor, unidade}]
+pessoas = LS.ler("rq.pessoas", PESSOAS_PADRAO);          // [{id, nome, cargo, email, unidade}]
+setores = LS.ler("rq.setores", [{ id: "s1", nome: "9313", unidade: "UIS3" }]);  // [{id, nome, unidade}]
 let listas   = LS.ler("rq.listas", []);     // ver novaLista()
 let precos   = LS.ler("rq.precos", {});     // { chaveItem: {preco, em} }
 const salvarTudo = () => { LS.gravar("rq.projetos", projetos); LS.gravar("rq.listas", listas); LS.gravar("rq.precos", precos); };
@@ -119,17 +234,43 @@ async function nuvemExcluirLista(id) {
   if (!sb) return;
   await sb.from("req_listas").delete().eq("id", id);
 }
-async function nuvemSalvarProjeto(p) {
-  if (!sb) return;
-  await sb.from("req_projetos").upsert(p);
+/* Colunas novas (unidade, status, autor) dependem do supabase_unidades.sql.
+   Enquanto ele não for rodado, grava o que a tabela aceitar e avisa. */
+const colunasFaltando = new Set();             // "tabela.coluna" ausentes na nuvem
+let avisouMigracao = false;
+function notarColunaFaltando(tabela, coluna) {
+  colunasFaltando.add(tabela + "." + coluna);
+  if (!avisouMigracao) { avisouMigracao = true; toast("⚠️ Falta rodar o supabase_unidades.sql no Supabase (veja Cadastros)."); }
 }
+function avisoMigracao() {
+  if (!colunasFaltando.size) return "";
+  return `<div class="aviso" style="margin-bottom:14px">⚠️ O Supabase ainda não tem a(s) coluna(s)
+    <strong>${[...colunasFaltando].map(esc).join(", ")}</strong>. Rode o arquivo <code>supabase_unidades.sql</code>
+    no SQL Editor do Supabase. Sem isso, a unidade de pessoas, setores e projetos não fica gravada na nuvem
+    e, ao recarregar, eles voltam a aparecer como UIS 3.</div>`;
+}
+async function upsertTolerante(tabela, obj) {
+  if (!sb) return true;
+  const reg = { ...obj };
+  for (let tentativa = 0; tentativa < 6; tentativa++) {
+    let error;
+    try { ({ error } = await sb.from(tabela).upsert(reg)); } catch (e) { error = e; }
+    if (!error) return true;
+    const m = /could not find the '([^']+)' column/i.exec(error.message || "");
+    if (!m || !(m[1] in reg)) { console.warn(`nuvem/${tabela}:`, error.message); return false; }
+    notarColunaFaltando(tabela, m[1]);
+    delete reg[m[1]];                           // tenta de novo sem a coluna que falta
+  }
+  return false;
+}
+async function nuvemSalvarProjeto(p) { return upsertTolerante("req_projetos", p); }
 async function nuvemExcluirProjeto(id) {
   if (!sb) return;
   await sb.from("req_projetos").delete().eq("id", id);
 }
-async function nuvemSalvarPessoa(p) { if (sb) await sb.from("req_pessoas").upsert(p); }
+async function nuvemSalvarPessoa(p) { return upsertTolerante("req_pessoas", p); }
 async function nuvemExcluirPessoa(id) { if (sb) await sb.from("req_pessoas").delete().eq("id", id); }
-async function nuvemSalvarSetor(s) { if (sb) await sb.from("req_setores").upsert(s); }
+async function nuvemSalvarSetor(s) { return upsertTolerante("req_setores", s); }
 async function nuvemExcluirSetor(id) { if (sb) await sb.from("req_setores").delete().eq("id", id); }
 
 async function nuvemSalvarPreco(chave, reg) {
@@ -147,17 +288,25 @@ async function carregarNuvem() {
       sb.from("req_precos").select("*"),
     ]);
     if (p.error || l.error || pr.error) throw new Error((p.error || l.error || pr.error).message);
-    projetos = (p.data || []).map(r => ({ id: r.id, nome: r.nome }));
+    projetos = (p.data || []).map(r => {
+      const o = { id: r.id, nome: r.nome };
+      for (const k of ["status", "autor", "unidade"]) if (r[k] != null && r[k] !== "") o[k] = r[k];
+      return o;
+    });
+    const semColuna = (rows, tabela, cols) => {
+      if (rows && rows.length) cols.forEach(c => { if (!(c in rows[0])) colunasFaltando.add(tabela + "." + c); });
+    };
+    semColuna(p.data, "req_projetos", ["unidade", "status", "autor"]);
     listas = (l.data || []).map(r => r.dados);
     precos = Object.fromEntries((pr.data || []).map(r => [r.chave, { preco: +r.preco, em: r.em }]));
     /* cadastros (tabelas podem não existir ainda; tolerante a erro) */
     try {
       const pe = await sb.from("req_pessoas").select("*");
-      if (!pe.error && pe.data && pe.data.length) pessoas = pe.data;
+      if (!pe.error && pe.data && pe.data.length) { pessoas = pe.data; semColuna(pe.data, "req_pessoas", ["unidade"]); }
     } catch { /* mantém local */ }
     try {
       const se = await sb.from("req_setores").select("*");
-      if (!se.error && se.data && se.data.length) setores = se.data;
+      if (!se.error && se.data && se.data.length) { setores = se.data; semColuna(se.data, "req_setores", ["unidade"]); }
     } catch { /* mantém local */ }
     deduzirUsuario();
     salvarTudo(); salvarCadastros();   // cache local para abrir rápido na próxima vez
@@ -568,15 +717,17 @@ function buscar(consulta, ignorarEspacos, limite = 60) {
 
 /* ---------------- modelos de dados ---------------- */
 function novaLista(titulo, projetoId, tipo) {
-  const eu = (usuarioAtual && usuarioAtual.nome) || P.pedro;
+  const U = UNI();
+  const eu = (usuarioAtual && usuarioAtual.nome) || U.padrao.solicitante;
   return {
     id: uid(), tipo: tipo || "RM",                    // RM = requisição de material · MM = cadastro mín/máx
+    unidade: UN,                                      // UIS3 | UIS — define quem enxerga a lista
     status: "andamento",                              // andamento | concluida
     autor: (usuarioAtual && usuarioAtual.nome) || emailSessao || "",
     anotacoes: "",
     titulo: titulo || "Nova requisição", projetoId: projetoId || "",
     numeroFO: "FO 185 1613-0015",
-    local: "185 - UIS 3", areaSetor: "PROJETOS",
+    local: U.local, areaSetor: "PROJETOS",
     emissao: hoje(), revisao: "0", numero: "",
     descricao: "", data: hoje(),
     solicitante: eu, setor: "", projetoNum: "", nrOS: "",   // setor em branco: código do cadastro
@@ -589,7 +740,7 @@ function novaLista(titulo, projetoId, tipo) {
 }
 /* completa a lista recém-criada com as assinaturas do próprio criador */
 function prepararAssinaturas(l) {
-  l.assinaturas = l.tipo === "MM" ? assinaturasMM(l) : assinaturasPorValor(0, l.solicitante);
+  l.assinaturas = l.tipo === "MM" ? assinaturasMM(l) : assinaturasPorValor(0, l.solicitante, unidadeDoRegistro(l));
   return l;
 }
 const totalDa = (l) => l.tipo === "MM"
@@ -744,7 +895,7 @@ function toast(msg) {
 
 /* setores: só código numérico */
 const setorValido = (v) => /^\d+$/.test(String(v || ""));
-const setorCadastrado = (v) => (setores || []).some(s => s.nome === v);
+const setorCadastrado = (v, un = UN) => setoresUN(un).some(s => s.nome === v);
 
 /* editor aberto: ao sair da tela, salva o que estiver pendente */
 let editorAtivo = null;
@@ -760,7 +911,7 @@ document.addEventListener("keydown", (e) => {
 function marcarSetor(el) {
   const fora = !!el.value && !setorCadastrado(el.value);
   el.classList.toggle("fora-cadastro", fora);
-  el.title = fora ? "Setor fora do cadastro (Cadastros → Setores)" : "Código numérico do setor — sugestões do cadastro";
+  el.title = fora ? `Setor fora do cadastro da ${UNI().nome} (Cadastros → Setores)` : "Código numérico do setor — sugestões do cadastro";
 }
 
 /* ---------------- roteamento ---------------- */
@@ -769,10 +920,13 @@ function render() {
   const h = location.hash || "#/";
   const app = $("#app");
   sairDoEditor();                                   // salva pendências do editor anterior
-  app.onclick = null;                               // cada tela liga os próprios cliques
+  app.onclick = null; app.onchange = null;          // cada tela liga os próprios eventos
+  aplicarUnidade();                                 // UIS ou UIS 3 (URL / login)
   document.body.classList.toggle("pg-editor", h.startsWith("#/lista/"));
+  $$("#topo nav a[href]").forEach(a => a.classList.toggle("ativo", a.getAttribute("href") === h));
   if (h.startsWith("#/lista/"))       telaEditor(app, h.slice(8));
   else if (h.startsWith("#/projeto/")) telaProjeto(app, h.slice(10));
+  else if (h === "#/historico")        telaHistorico(app);
   else if (h === "#/cadastros")        telaCadastros(app);
   else if (h === "#/arquivados")       telaArquivados(app);
   else telaInicio(app);
@@ -792,12 +946,13 @@ function telaInicio(app) {
     return autor === filtro.slice(2);
   };
   const autores = [...new Set([
-    ...pessoas.map(p => p.nome),
-    ...listas.map(l => l.autor).filter(Boolean),
-    ...projetos.map(p => p.autor).filter(Boolean),
+    ...pessoasUN().map(p => p.nome),
+    ...listasUN().map(l => l.autor).filter(Boolean),
+    ...projetosUN().map(p => p.autor).filter(Boolean),
   ])].sort();
+  if (filtro.startsWith("p:") && !autores.includes(filtro.slice(2))) filtro = "todos";   // pessoa de outra unidade
 
-  const ativos = projetos.filter(p => p.status !== "arquivado" && donoOk(p.autor));
+  const ativos = projetosUN().filter(p => p.status !== "arquivado" && donoOk(p.autor));
   const ordem = localStorage.getItem("rq.ordem") || "novas";   // 'novas' (padrão) ou 'antigas'
   const quando = (l) => {
     const t = Date.parse(l.criadoEm || "");                    // data de criação (aaaa-mm-dd)
@@ -806,8 +961,8 @@ function telaInicio(app) {
     return isNaN(p) ? 0 : p;
   };
   const ordenar = (arr) => arr.sort((a, b) => ordem === "antigas" ? quando(a) - quando(b) : quando(b) - quando(a));
-  const rms = ordenar(listas.filter(l => (l.tipo || "RM") !== "MM" && donoOk(l.autor)));
-  const mms = ordenar(listas.filter(l => l.tipo === "MM" && donoOk(l.autor)));
+  const rms = ordenar(listasUN().filter(l => (l.tipo || "RM") !== "MM" && donoOk(l.autor)));
+  const mms = ordenar(listasUN().filter(l => l.tipo === "MM" && donoOk(l.autor)));
   const cartaoLista = (l) => {
     const proj = projetos.find(p => p.id === l.projetoId);
     const ult = ultimaEdicao(l);
@@ -853,6 +1008,7 @@ function telaInicio(app) {
       <button class="btn sec" id="btn-nova-mm">+ Cadastro Mín/Máx (MM)</button>
       <button class="btn sec" id="btn-novo-projeto">+ Novo projeto</button>
     </div>
+    ${avisoMigracao()}
     ${ativos.length ? `<div class="secao-titulo">Projetos em andamento</div><div class="grade-cartoes">${ativos.map(cartaoProjeto).join("")}</div>` : ""}
     <div class="secao-titulo">Requisições (RM)</div>
     ${rms.length
@@ -868,10 +1024,11 @@ function telaInicio(app) {
     const titulo = prompt("Título da lista de materiais:", "");
     if (titulo === null) return;
     let projetoId = "";
-    if (projetos.length) {
-      const nomes = projetos.map((p, i) => `${i + 1} - ${p.nome}`).join("\n");
+    const projs = projetosUN();
+    if (projs.length) {
+      const nomes = projs.map((p, i) => `${i + 1} - ${p.nome}`).join("\n");
       const r = prompt("Vincular a um projeto? Digite o número (ou deixe vazio):\n" + nomes, "");
-      if (r) { const p = projetos[parseInt(r, 10) - 1]; if (p) projetoId = p.id; }
+      if (r) { const p = projs[parseInt(r, 10) - 1]; if (p) projetoId = p.id; }
     }
     const l = prepararAssinaturas(novaLista(titulo.trim() || "Nova requisição", projetoId));
     l.descricao = "";
@@ -898,7 +1055,7 @@ function telaInicio(app) {
   $("#btn-novo-projeto").onclick = () => {
     const nome = prompt("Nome do projeto:");
     if (!nome) return;
-    const p = { id: uid(), nome: nome.trim(), status: "andamento", autor: (usuarioAtual && usuarioAtual.nome) || emailSessao || "" };
+    const p = { id: uid(), nome: nome.trim(), status: "andamento", autor: (usuarioAtual && usuarioAtual.nome) || emailSessao || "", unidade: UN };
     projetos.push(p); salvarTudo(); nuvemSalvarProjeto(p); render();
   };
   app.onclick = (e) => {
@@ -942,6 +1099,7 @@ function telaInicio(app) {
 function telaProjeto(app, id) {
   const p = projetos.find(x => x.id === id);
   if (!p) { location.hash = "#/"; return; }
+  if (!garantirUnidade(unidadeDoRegistro(p))) return;
   const ls = listas.filter(l => l.projetoId === id);
   const total = ls.reduce((s, l) => s + totalDa(l), 0);
   const totalItens = ls.reduce((s, l) => s + l.itens.length, 0);
@@ -1005,7 +1163,7 @@ function telaProjeto(app, id) {
    TELA: PROJETOS ARQUIVADOS (concluídos)
    ============================================================ */
 function telaArquivados(app) {
-  const arquivados = projetos.filter(p => p.status === "arquivado");
+  const arquivados = projetosUN().filter(p => p.status === "arquivado");
   const cartao = (p) => {
     const ls = listas.filter(l => l.projetoId === p.id);
     const tot = ls.reduce((s, l) => s + totalDa(l), 0);
@@ -1035,88 +1193,163 @@ function telaArquivados(app) {
 }
 
 /* ============================================================
-   TELA: CADASTROS — assinantes (nomes/funções/e-mails) e setores
+   TELA: CADASTROS — assinantes e setores por unidade
+   (UIS · UIS 3 · Todos). Cada unidade vê o que é dela + os comuns.
    ============================================================ */
+/* formulário simples em janela — devolve os valores ou null (cancelar/Esc) */
+function formulario(titulo, campos, valores = {}, validar = null) {
+  return new Promise((resolve) => {
+    const cx = document.createElement("div");
+    cx.className = "modal no-print";
+    cx.innerHTML = `<form class="modal-caixa form-cad" novalidate>
+      <h2>${esc(titulo)}</h2>
+      ${campos.map(c => `<div class="campo">
+        <label for="fc-${c.nome}">${esc(c.rot)}</label>
+        ${c.opcoes
+          ? `<select id="fc-${c.nome}" name="${c.nome}">${c.opcoes.map(([v, r]) =>
+              `<option value="${esc(v)}" ${String(valores[c.nome] ?? "") === v ? "selected" : ""}>${esc(r)}</option>`).join("")}</select>`
+          : `<input id="fc-${c.nome}" name="${c.nome}" type="${c.tipo || "text"}" value="${esc(valores[c.nome] ?? "")}"
+               placeholder="${esc(c.ph || "")}" ${c.attrs || ""}>`}
+        ${c.ajuda ? `<small>${esc(c.ajuda)}</small>` : ""}
+      </div>`).join("")}
+      <p class="form-erro" data-erro></p>
+      <div class="modal-acoes"><span class="espacador"></span>
+        <button type="button" class="btn sec" data-cancelar>Cancelar</button>
+        <button type="submit" class="btn">Salvar</button></div>
+    </form>`;
+    document.body.appendChild(cx);
+    const f = cx.querySelector("form");
+    const fim = (v) => { cx.remove(); resolve(v); };
+    cx.querySelector("[data-cancelar]").onclick = () => fim(null);
+    f.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); fim(null); } });
+    f.onsubmit = (e) => {
+      e.preventDefault();
+      const v = {};
+      campos.forEach(c => { v[c.nome] = f.elements.namedItem(c.nome).value; });
+      const erro = validar ? validar(v) : "";
+      if (erro) { f.querySelector("[data-erro]").textContent = erro; return; }
+      fim(v);
+    };
+    setTimeout(() => { const el = f.querySelector("input, select"); if (el) { el.focus(); if (el.select) el.select(); } }, 0);
+  });
+}
+
 function telaCadastros(app) {
+  const verTodas = podeTrocarUnidade() && sessionStorage.getItem("rq.cadTodas") === "1";
+  const visivel = (u) => verTodas || naUnidade(u);
+  const sobrepoe = (a, b) => a === b || a === TODOS || b === TODOS;
+  const selUnidade = (tipo, id, atual, sugerido) => `
+    <select class="sel-un" data-un-${tipo}="${esc(id)}" title="Unidade em que aparece">
+      ${OPCOES_UNIDADE.map(([v, r]) => `<option value="${v}" ${v === atual ? "selected" : ""}>${r}</option>`).join("")}
+    </select>${sugerido ? ' <span class="etiqueta sugerido" title="Deduzido pela função — escolha a unidade para confirmar">sugerido</span>' : ""}`;
+  const listaP = pessoas.filter(p => visivel(unidadeDaPessoa(p)));
+  const listaS = setores.filter(s => visivel(unidadeDoSetor(s)))
+    .sort((a, b) => String(a.nome).localeCompare(String(b.nome), "pt-BR", { numeric: true }));
+  const ocultosP = pessoas.length - listaP.length, ocultosS = setores.length - listaS.length;
+
   const linhaPessoa = (p) => `<tr>
-    <td>${esc(p.nome)}</td><td>${esc(p.cargo)}</td><td>${esc(p.email || "—")}</td>
+    <td>${esc(p.nome)}${usuarioAtual && p === usuarioAtual ? ' <span class="etiqueta ok">você</span>' : ""}</td>
+    <td>${esc(p.cargo)}</td><td>${esc(p.email || "—")}</td>
+    <td style="white-space:nowrap">${selUnidade("pessoa", p.id, unidadeDaPessoa(p), !valorUnidade(p.unidade))}</td>
     <td style="white-space:nowrap">
-      <button class="btn mini sec" data-editar-pessoa="${p.id}">Editar</button>
-      <button class="btn mini perigo" data-excluir-pessoa="${p.id}">Excluir</button>
+      <button class="btn mini sec" data-editar-pessoa="${esc(p.id)}">Editar</button>
+      <button class="btn mini perigo" data-excluir-pessoa="${esc(p.id)}">Excluir</button>
     </td></tr>`;
   const linhaSetor = (s) => `<tr>
     <td>${esc(s.nome)}${setorValido(s.nome) ? "" : ' <span class="etiqueta" title="Edite para um código só com números">não numérico</span>'}</td>
+    <td style="white-space:nowrap">${selUnidade("setor", s.id, unidadeDoSetor(s), !valorUnidade(s.unidade))}</td>
     <td style="white-space:nowrap">
-      <button class="btn mini sec" data-editar-setor="${s.id}">Editar</button>
-      <button class="btn mini perigo" data-excluir-setor="${s.id}">Excluir</button>
+      <button class="btn mini sec" data-editar-setor="${esc(s.id)}">Editar</button>
+      <button class="btn mini perigo" data-excluir-setor="${esc(s.id)}">Excluir</button>
     </td></tr>`;
 
   app.innerHTML = `
     <div class="pagina-titulo">
-      <h1>Cadastros</h1><span class="espacador"></span>
+      <h1>Cadastros</h1><span class="etiqueta tipo">${esc(UNI().nome)}</span><span class="espacador"></span>
+      ${podeTrocarUnidade() ? `<select id="cad-ver" title="Quais cadastros listar">
+          <option value="">Mostrar: ${esc(UNI().nome)} + comuns</option>
+          <option value="todas" ${verTodas ? "selected" : ""}>Mostrar: todas as unidades</option>
+        </select>` : ""}
       <a class="btn sec" href="#/">← Voltar</a>
     </div>
+    ${avisoMigracao()}
+    <div class="dica cad-intro">Cada unidade enxerga só as pessoas e os setores dela e os marcados como <strong>Todos</strong>
+      (comuns às duas — ex.: gerentes e coordenadores). O banco de itens e a memória de preços são compartilhados.
+      ${podeTrocarUnidade() && !verTodas && (ocultosP || ocultosS)
+        ? `<br>${[ocultosP ? `${ocultosP} pessoa(s)` : "", ocultosS ? `${ocultosS} setor(es)` : ""].filter(Boolean).join(" e ")} da outra unidade não aparecem nesta lista.` : ""}</div>
+
     <div class="secao-titulo">Assinantes (nomes e funções)</div>
-    <p style="font-size:12px;color:var(--cinza);margin:0 0 8px">
-      O <strong>e-mail</strong> vincula a pessoa ao login: quem entrar com ele vira automaticamente o solicitante das novas listas.
-      Atenção: a alçada de valores usa os nomes de Pedro, Alex, Jaisson e Ademilson — se renomear essas pessoas, avise para ajustarmos a regra.</p>
-    <table class="app"><thead><tr><th>Nome</th><th>Função</th><th>E-mail (login)</th><th></th></tr></thead>
-      <tbody>${pessoas.map(linhaPessoa).join("")}</tbody></table>
+    <p class="cad-nota">O <strong>e-mail</strong> vincula a pessoa ao login: quem entrar com ele vira o solicitante das novas listas e trabalha
+      na unidade dela (com <strong>Todos</strong>, pode alternar entre UIS e UIS 3 no topo da tela).
+      A alçada de assinaturas é montada pela <strong>função</strong>: Supervisor de Manutenção, Gerente Industrial e Gerente de Operações de cada unidade.</p>
+    <table class="app cad"><thead><tr><th>Nome</th><th>Função</th><th>E-mail (login)</th><th>Unidade</th><th></th></tr></thead>
+      <tbody>${listaP.map(linhaPessoa).join("") || `<tr><td colspan="5">Nenhuma pessoa cadastrada para esta unidade.</td></tr>`}</tbody></table>
     <button class="btn" id="btn-add-pessoa" style="margin-top:10px">+ Adicionar assinante</button>
 
     <div class="secao-titulo">Setores (código numérico)</div>
-    <p style="font-size:12px;color:var(--cinza);margin:0 0 8px">
-      Aparecem como sugestão no campo <strong>SETOR</strong> da RM e do MM (que aceita apenas números). Novas requisições começam com o setor em branco.</p>
-    <table class="app" style="max-width:480px"><thead><tr><th>Setor</th><th></th></tr></thead>
-      <tbody>${setores.slice().sort((a, b) => String(a.nome).localeCompare(String(b.nome), "pt-BR", { numeric: true })).map(linhaSetor).join("")}</tbody></table>
+    <p class="cad-nota">Aparecem como sugestão no campo <strong>SETOR</strong> da RM e do MM (que aceita apenas números).
+      Novas requisições começam com o setor em branco.</p>
+    <table class="app cad" style="max-width:560px"><thead><tr><th>Setor</th><th>Unidade</th><th></th></tr></thead>
+      <tbody>${listaS.map(linhaSetor).join("") || `<tr><td colspan="3">Nenhum setor cadastrado para esta unidade.</td></tr>`}</tbody></table>
     <button class="btn" id="btn-add-setor" style="margin-top:10px">+ Adicionar setor</button>`;
 
-  const pedirPessoa = (p = {}) => {
-    const nome = prompt("Nome completo:", p.nome || ""); if (nome === null || !nome.trim()) return null;
-    const cargo = prompt("Função/cargo (ex.: Supervisor de Manutenção - UIS3):", p.cargo || ""); if (cargo === null) return null;
-    const email = prompt("E-mail de login (opcional, vincula ao Supabase):", p.email || ""); if (email === null) return null;
-    return { nome: nome.trim(), cargo: cargo.trim(), email: email.trim().toLowerCase() };
-  };
-  /* pede o código do setor: só números e sem repetir */
-  const pedirSetor = (atual = "") => {
-    let sugestao = atual;
-    for (;;) {
-      const v = prompt("Código numérico do setor (somente números, ex.: 9313):", sugestao);
-      if (v === null) return null;
-      const c = v.replace(/\s/g, "");
-      if (!setorValido(c)) { alert("Use apenas números no código do setor."); sugestao = v; continue; }
-      if (c !== atual && setores.some(s => s.nome === c)) { alert(`O setor ${c} já está cadastrado.`); sugestao = c; continue; }
-      return c;
-    }
-  };
-  $("#btn-add-pessoa").onclick = () => {
-    const d = pedirPessoa(); if (!d) return;
+  const formPessoa = (p) => formulario(p ? "Editar assinante" : "Novo assinante", [
+      { nome: "nome", rot: "Nome completo" },
+      { nome: "cargo", rot: "Função / cargo", ph: `Ex.: Supervisor de Manutenção - ${UNI().sigla}` },
+      { nome: "email", rot: "E-mail de login (opcional)", tipo: "email",
+        ajuda: "Quem entrar com este e-mail vira o solicitante das novas listas." },
+      { nome: "unidade", rot: "Unidade", opcoes: OPCOES_UNIDADE,
+        ajuda: "UIS e UIS 3 não se enxergam. “Todos” aparece nas duas (gerentes, coordenadores…)." },
+    ], p ? { nome: p.nome, cargo: p.cargo, email: p.email, unidade: unidadeDaPessoa(p) } : { unidade: UN },
+    (v) => {
+      if (!v.nome.trim()) return "Informe o nome.";
+      const em = norm(v.email.trim());
+      if (em && pessoas.some(x => x !== p && x.email && norm(x.email) === em)) return "Este e-mail já está vinculado a outra pessoa.";
+      return "";
+    }).then(v => v && { nome: v.nome.trim(), cargo: v.cargo.trim(), email: v.email.trim().toLowerCase(), unidade: v.unidade });
+
+  const formSetor = (s) => formulario(s ? "Editar setor" : "Novo setor", [
+      { nome: "nome", rot: "Código do setor (somente números)", ph: "Ex.: 9313", attrs: 'inputmode="numeric" autocomplete="off"' },
+      { nome: "unidade", rot: "Unidade", opcoes: OPCOES_UNIDADE },
+    ], s ? { nome: s.nome, unidade: unidadeDoSetor(s) } : { unidade: UN },
+    (v) => {
+      const c = v.nome.replace(/\s/g, "");
+      if (!setorValido(c)) return "Use apenas números no código do setor.";
+      const dup = setores.find(x => x !== s && x.nome === c && sobrepoe(unidadeDoSetor(x), v.unidade));
+      if (dup) return `O setor ${c} já está cadastrado (${nomeUnidade(unidadeDoSetor(dup))}).`;
+      return "";
+    }).then(v => v && { nome: v.nome.replace(/\s/g, ""), unidade: v.unidade });
+
+  const avisarSeSaiu = (rotulo, u) => { if (!verTodas && !naUnidade(u)) toast(`${rotulo} agora aparece só na ${nomeUnidade(u)}.`); };
+
+  $("#btn-add-pessoa").onclick = async () => {
+    const d = await formPessoa(); if (!d) return;
     const p = { id: uid(), ...d };
-    pessoas.push(p); salvarCadastros(); nuvemSalvarPessoa(p); deduzirUsuario(); render();
+    pessoas.push(p); salvarCadastros(); nuvemSalvarPessoa(p); deduzirUsuario(); avisarSeSaiu(p.nome, p.unidade); render();
   };
-  $("#btn-add-setor").onclick = () => {
-    const nome = pedirSetor(); if (!nome) return;
-    const s = { id: uid(), nome };
-    setores.push(s); salvarCadastros(); nuvemSalvarSetor(s); render();
+  $("#btn-add-setor").onclick = async () => {
+    const d = await formSetor(); if (!d) return;
+    const s = { id: uid(), ...d };
+    setores.push(s); salvarCadastros(); nuvemSalvarSetor(s); avisarSeSaiu("O setor " + s.nome, s.unidade); render();
   };
-  app.onclick = (e) => {
+  app.onclick = async (e) => {
     const d = e.target.dataset || {};
     if (d.editarPessoa) {
       const p = pessoas.find(x => x.id === d.editarPessoa);
-      const novo = pedirPessoa(p); if (!novo) return;
-      Object.assign(p, novo); salvarCadastros(); nuvemSalvarPessoa(p); deduzirUsuario(); render();
+      const novo = await formPessoa(p); if (!novo) return;
+      Object.assign(p, novo); salvarCadastros(); nuvemSalvarPessoa(p); deduzirUsuario(); avisarSeSaiu(p.nome, p.unidade); render();
     }
     if (d.excluirPessoa) {
       const p = pessoas.find(x => x.id === d.excluirPessoa);
       if (confirm(`Excluir “${p.nome}” do cadastro de assinantes?`)) {
         pessoas = pessoas.filter(x => x.id !== d.excluirPessoa);
-        salvarCadastros(); nuvemExcluirPessoa(d.excluirPessoa); render();
+        salvarCadastros(); nuvemExcluirPessoa(d.excluirPessoa); deduzirUsuario(); render();
       }
     }
     if (d.editarSetor) {
       const s = setores.find(x => x.id === d.editarSetor);
-      const nome = pedirSetor(s.nome); if (!nome) return;
-      s.nome = nome; salvarCadastros(); nuvemSalvarSetor(s); render();
+      const novo = await formSetor(s); if (!novo) return;
+      Object.assign(s, novo); salvarCadastros(); nuvemSalvarSetor(s); avisarSeSaiu("O setor " + s.nome, s.unidade); render();
     }
     if (d.excluirSetor) {
       const s = setores.find(x => x.id === d.excluirSetor);
@@ -1124,6 +1357,21 @@ function telaCadastros(app) {
         setores = setores.filter(x => x.id !== d.excluirSetor);
         salvarCadastros(); nuvemExcluirSetor(d.excluirSetor); render();
       }
+    }
+  };
+  /* troca rápida de unidade direto na tabela */
+  app.onchange = (e) => {
+    const el = e.target;
+    if (el.id === "cad-ver") { sessionStorage.setItem("rq.cadTodas", el.value ? "1" : ""); render(); return; }
+    if (el.dataset.unPessoa) {
+      const p = pessoas.find(x => x.id === el.dataset.unPessoa); if (!p) return;
+      p.unidade = el.value; salvarCadastros(); nuvemSalvarPessoa(p); deduzirUsuario(); avisarSeSaiu(p.nome, p.unidade); render();
+    }
+    if (el.dataset.unSetor) {
+      const s = setores.find(x => x.id === el.dataset.unSetor); if (!s) return;
+      const dup = setores.find(x => x !== s && x.nome === s.nome && sobrepoe(unidadeDoSetor(x), el.value));
+      if (dup) { toast(`O setor ${s.nome} já existe em ${nomeUnidade(unidadeDoSetor(dup))}.`); render(); return; }
+      s.unidade = el.value; salvarCadastros(); nuvemSalvarSetor(s); avisarSeSaiu("O setor " + s.nome, s.unidade); render();
     }
   };
 }
@@ -1135,16 +1383,21 @@ function telaCadastros(app) {
 function telaEditor(app, id) {
   const L = listas.find(x => x.id === id);
   if (!L) { location.hash = "#/"; return; }
+  if (!garantirUnidade(unidadeDoRegistro(L))) return;   // lista de outra unidade
+  const UL = unidadeDoRegistro(L);
   if (!L.tipo) L.tipo = "RM";
   if (!L.status) L.status = "andamento";
   const ehMM = L.tipo === "MM";
-  const prefixoPdf = ehMM ? "MM_UIS3_" : "RM_UIS3_";
+  const prefixoPdf = (ehMM ? "MM_" : "RM_") + UNIDADES[UL].sigla + "_";
   const nomePdf = () => prefixoPdf + (L.titulo || "documento").replace(/[\\/:*?"<>|]/g, "-");
 
   const travada = () => L.status === "concluida";
   const abaInicial = sessionStorage.getItem("rq.latAba") || "itens";
-  const setoresNum = setores.filter(s => setorValido(s.nome))
+  const setoresNum = setoresUN(UL).filter(s => setorValido(s.nome))
     .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR", { numeric: true }));
+  /* assinantes possíveis: pessoas da unidade + comuns (e quem já estiver na folha) */
+  const opcoesAss = (sel) => [...new Set([...pessoasUN(UL).map(p => p.nome), ...(sel ? [sel] : [])])]
+    .map(n => `<option ${n === sel ? "selected" : ""}>${esc(n)}</option>`).join("");
 
   app.innerHTML = `
   <div class="ed">
@@ -1153,13 +1406,13 @@ function telaEditor(app, id) {
       <input type="text" id="ed-titulo" class="ed-titulo" value="${esc(L.titulo)}" placeholder="Título da lista">
       <select id="ed-projeto" title="Projeto vinculado">
         <option value="">— sem projeto —</option>
-        ${projetos.filter(p => p.status !== "arquivado" || p.id === L.projetoId)
+        ${projetosUN(UL).filter(p => p.status !== "arquivado" || p.id === L.projetoId)
           .map(p => `<option value="${p.id}" ${p.id === L.projetoId ? "selected" : ""}>${esc(p.nome)}${p.status === "arquivado" ? " (arquivado)" : ""}</option>`).join("")}
       </select>
       <label class="ed-rot" title="Quem criou/responde por esta lista">Autor
         <select id="ed-autor">
           <option value="" ${!L.autor ? "selected" : ""}>— não definido —</option>
-          ${[...new Set([...pessoas.map(p => p.nome), ...(L.autor ? [L.autor] : [])])].sort()
+          ${[...new Set([...pessoasUN(UL).map(p => p.nome), ...(L.autor ? [L.autor] : [])])].sort()
             .map(n => `<option ${n === L.autor ? "selected" : ""}>${esc(n)}</option>`).join("")}
         </select>
       </label>
@@ -1602,7 +1855,7 @@ function telaEditor(app, id) {
   /* ===== folha RM: REQUISIÇÃO DE MATERIAL ===== */
   function folhaRM() {
     const total = totalDa(L);
-    if (!L.assinaturasManuais && !travada()) L.assinaturas = assinaturasPorValor(total, L.solicitante);
+    if (!L.assinaturasManuais && !travada()) L.assinaturas = assinaturasPorValor(total, L.solicitante, UL);
     $("#total-vivo").textContent = "Total: " + dinheiro(total);
 
     const linhaItem = (i, idx) => `
@@ -1626,7 +1879,7 @@ function telaEditor(app, id) {
         <div class="d-ass-troca no-print">
           <select data-ass="${i}">
             <option value="" ${!nome ? "selected" : ""}>(sem assinatura)</option>
-            ${pessoas.map(p => `<option ${p.nome === nome ? "selected" : ""}>${esc(p.nome)}</option>`).join("")}
+            ${opcoesAss(nome)}
           </select>
         </div>
       </td>`;
@@ -1734,7 +1987,7 @@ function telaEditor(app, id) {
       <div class="d-ass-troca no-print">
         <select data-ass="${i}">
           <option value="" ${!ass[i] ? "selected" : ""}>(sem assinatura)</option>
-          ${pessoas.map(p => `<option ${p.nome === ass[i] ? "selected" : ""}>${esc(p.nome)}</option>`).join("")}
+          ${opcoesAss(ass[i])}
         </select>
       </div>`;
 
@@ -1900,6 +2153,269 @@ function telaEditor(app, id) {
   if (!travada() && !corpo.classList.contains("lat-fechada")) caixa.focus();
 }
 
+/* ============================================================
+   TELA: HISTÓRICO POR ITEM
+   Todos os itens lançados nas requisições da unidade, da data mais
+   recente para a mais antiga. Filtro imediato por CÓDIGO (começo do
+   código) ou por NOME (todos os termos, sem acento) — digitar em um
+   bloqueia o outro. A página mostra só 30 linhas por vez.
+   ============================================================ */
+const HIST_PAGINA = 30;
+const DESC_MM_PADRAO = "RELAÇÃO DE MÍNIMOS E MÁXIMOS PARA COMPRA";
+const chaveItemHist = (codigo, n) => (codigo && codigo !== "S/ CÓD.") ? "C:" + codigo : "D:" + n;
+
+/* uma linha por item lançado (monta em memória; a tela só desenha 30) */
+function montarHistorico() {
+  const nomeProj = new Map(projetos.map(p => [p.id, p.nome]));
+  const linhas = [];
+  for (const l of listasUN()) {
+    const mm = l.tipo === "MM";
+    const data = l.data || l.criadoEm || "";
+    const criada = Date.parse((l.log && l.log[0] && l.log[0].em) || l.criadoEm || "") || 0;
+    (l.itens || []).forEach((i, idx) => {
+      const n = norm(i.descricao);
+      const q = mm ? (+i.qtdMin || 0) : (+i.qtd || 0);
+      const preco = +i.preco || 0;
+      linhas.push({
+        l, idx, mm, codigo: String(i.codigo ?? ""), nome: String(i.descricao ?? ""), un: i.un || "",
+        q, qMax: mm ? (+i.qtdMax || 0) : 0, preco, total: q * preco,
+        data, t: Date.parse(data) || 0, criada,
+        autor: l.autor || l.solicitante || "", projeto: nomeProj.get(l.projetoId) || "",
+        n, ns: semEspaco(n), c: norm(i.codigo).replace(/\s/g, ""),
+      });
+    });
+  }
+  /* data da requisição ↓, depois a lista criada por último, depois a ordem dentro da lista */
+  linhas.sort((a, b) => b.t - a.t || b.criada - a.criada || a.idx - b.idx);
+  /* preço anterior do mesmo item (para a seta de variação) */
+  const ultimo = new Map();
+  for (let k = linhas.length - 1; k >= 0; k--) {
+    const r = linhas[k];
+    if (!r.preco) continue;
+    const ch = chaveItemHist(r.codigo, r.n);
+    if (ultimo.has(ch)) r.ant = ultimo.get(ch);
+    ultimo.set(ch, r.preco);
+  }
+  return linhas;
+}
+
+function filtrarHistorico(linhas, f) {
+  let r = f.tipo === "RM" ? linhas.filter(x => !x.mm) : f.tipo === "MM" ? linhas.filter(x => x.mm) : linhas;
+  const c = norm(f.cod).replace(/\s/g, "");
+  if (c) return r.filter(x => x.c.startsWith(c));
+  const termos = norm(f.nome).trim().split(/\s+/).filter(Boolean);
+  if (!termos.length) return r;
+  const tns = termos.map(semEspaco);
+  return r.filter(x => termos.every((t, i) => x.n.includes(t) || (f.espacos && tns[i] && x.ns.includes(tns[i]))));
+}
+
+/* destaca os termos encontrados (só quando o texto normalizado tem o mesmo tamanho) */
+function marcarTermos(txt, termos) {
+  const s = String(txt ?? ""), n = norm(s);
+  if (!termos.length || n.length !== s.length) return esc(s);
+  const m = new Array(s.length).fill(false);
+  for (const t of termos) {
+    for (let p = n.indexOf(t); p >= 0; p = n.indexOf(t, p + t.length)) for (let k = p; k < p + t.length; k++) m[k] = true;
+  }
+  let out = "", dentro = false;
+  for (let k = 0; k < s.length; k++) {
+    if (m[k] !== dentro) { out += m[k] ? "<mark>" : "</mark>"; dentro = m[k]; }
+    out += esc(s[k]);
+  }
+  return out + (dentro ? "</mark>" : "");
+}
+
+function resumoHistorico(res, f) {
+  if (!res.length) return "";
+  const porCod = new Map();
+  for (const r of res) {
+    const k = r.codigo || "—";
+    const c = porCod.get(k);
+    if (c) c.n++; else porCod.set(k, { n: 1, nome: r.nome, un: r.un });
+  }
+  const nReq = new Set(res.map(r => r.l.id)).size;
+  let h = `<strong>${res.length}</strong> lançamento(s) em <strong>${nReq}</strong> requisição(ões) · <strong>${porCod.size}</strong> código(s)`;
+  if (!f.cod && !f.nome.trim()) return h + " · da data mais recente para a mais antiga";
+  if (porCod.size === 1) {
+    const [cod, info] = [...porCod][0];
+    const comPreco = res.filter(r => r.preco);
+    h = `<span class="h-item">${esc(cod)} · ${esc(info.nome)}</span><br>` + h;
+    if (comPreco.length) {
+      const ps = comPreco.map(r => r.preco);
+      h += ` · último preço <strong>${dinheiro(comPreco[0].preco)}</strong> em ${dataBR(comPreco[0].data)}`;
+      if (comPreco.length > 1) h += ` · menor <strong>${dinheiro(Math.min(...ps))}</strong> · maior <strong>${dinheiro(Math.max(...ps))}</strong>`;
+    }
+    const qRM = res.filter(r => !r.mm).reduce((s, r) => s + r.q, 0);
+    if (qRM) h += ` · qtd. requisitada <strong>${fmtNum(qRM)} ${esc(info.un)}</strong>`;
+    return h;
+  }
+  const top = [...porCod].sort((a, b) => b[1].n - a[1].n).slice(0, 12);
+  h += `<div class="h-chips">Códigos encontrados (clique para ver só um): ${top.map(([c, i]) => c === "—"
+      ? `<span class="h-chip mudo">sem código <b>×${i.n}</b></span>`
+      : `<button class="h-chip" data-cod="${esc(c)}" title="${esc(i.nome)}">${esc(c)} <b>×${i.n}</b></button>`).join("")}
+    ${porCod.size > 12 ? `<span class="h-mais-cod">+${porCod.size - 12}</span>` : ""}</div>`;
+  return h;
+}
+
+function telaHistorico(app) {
+  const linhas = montarHistorico();
+  const f = { cod: "", nome: "", espacos: true, tipo: "" };
+  try { Object.assign(f, JSON.parse(sessionStorage.getItem("rq.hist") || "{}")); } catch { /* padrão */ }
+  if (f.cod) f.nome = "";
+  let pagina = 1, res = [];
+  const nReq = new Set(linhas.map(r => r.l.id)).size;
+
+  app.innerHTML = `
+    <div class="pagina-titulo">
+      <h1>Histórico por item</h1><span class="etiqueta tipo">${esc(UNI().nome)}</span>
+      <span class="espacador"></span>
+      <span class="h-total">${linhas.length.toLocaleString("pt-BR")} itens lançados em ${nReq} requisição(ões)</span>
+    </div>
+    <div class="h-filtros">
+      <div class="h-campo cod" id="hc-cod">
+        <label for="h-cod">Código</label>
+        <input type="text" id="h-cod" inputmode="numeric" autocomplete="off" spellcheck="false">
+        <button class="h-limpar" id="hl-cod" title="Limpar (Esc)" hidden>✕</button>
+      </div>
+      <div class="h-ou">ou</div>
+      <div class="h-campo nome" id="hc-nome">
+        <label for="h-nome">Nome do material</label>
+        <input type="text" id="h-nome" autocomplete="off" spellcheck="false">
+        <button class="h-limpar" id="hl-nome" title="Limpar (Esc)" hidden>✕</button>
+      </div>
+      <div class="h-opcoes">
+        <label class="check"><input type="checkbox" id="h-espacos"> Ignorar espaços/traços</label>
+        <select id="h-tipo" title="Tipo de documento">
+          <option value="">RM e MM</option><option value="RM">Só RM</option><option value="MM">Só MM</option>
+        </select>
+      </div>
+    </div>
+    <div class="h-resumo" id="h-resumo"></div>
+    <div class="h-rolagem">
+      <table class="app hist">
+        <thead><tr>
+          <th>Data</th><th>Código</th><th>Nome do material</th><th>Un</th><th class="num">Qtd.</th>
+          <th class="num">Preço un.</th><th class="num">Total</th><th>Requisição</th><th>Autor</th>
+        </tr></thead>
+        <tbody id="h-corpo"></tbody>
+      </table>
+    </div>
+    <div class="h-rodape"><span id="h-conta"></span><button class="btn sec" id="h-mais" hidden></button></div>`;
+
+  const inCod = $("#h-cod"), inNome = $("#h-nome");
+  inCod.value = f.cod; inNome.value = f.nome;
+  $("#h-espacos").checked = f.espacos !== false;
+  $("#h-tipo").value = f.tipo || "";
+
+  const variacao = (r) => {
+    if (!r.ant || !r.preco) return "";
+    const v = (r.preco - r.ant) / r.ant;
+    if (Math.abs(v) < 0.005) return `<span class="h-var igual" title="Igual ao lançamento anterior deste item">=</span>`;
+    const pct = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 1 }).format(Math.abs(v) * 100);
+    return `<span class="h-var ${v > 0 ? "sobe" : "desce"}" title="Lançamento anterior deste item: ${dinheiro(r.ant)}">${v > 0 ? "▲" : "▼"} ${pct}%</span>`;
+  };
+  const codHtml = (r) => {
+    const c = norm(f.cod).replace(/\s/g, "");
+    if (c && !/\s/.test(r.codigo) && norm(r.codigo).length === r.codigo.length && r.c.startsWith(c))
+      return `<mark>${esc(r.codigo.slice(0, c.length))}</mark>${esc(r.codigo.slice(c.length))}`;
+    return esc(r.codigo || "—");
+  };
+  /* repetida = mesma requisição da linha de cima: só o título, sem repetir descrição/etiquetas */
+  const linha = (r, termos, repetida) => {
+    const desc = (r.l.descricao || "").trim();
+    const mostraDesc = !repetida && desc && !(r.mm && norm(desc) === norm(DESC_MM_PADRAO));
+    const concl = !repetida && r.l.status === "concluida";
+    const proj = repetida ? "" : r.projeto;
+    return `<tr${repetida ? ' class="h-rep"' : ""}>
+      <td class="h-data">${esc(dataBR(r.data)) || "—"}</td>
+      <td class="h-cod">${codHtml(r)}</td>
+      <td class="h-nome">${marcarTermos(r.nome, termos)}</td>
+      <td class="h-un">${esc(r.un)}</td>
+      <td class="num">${r.mm
+        ? `<span title="Qtde mínima · máxima">mín ${fmtNum(r.q) || 0}${r.qMax ? ` · máx ${fmtNum(r.qMax)}` : ""}</span>`
+        : (fmtNum(r.q) || "—")}</td>
+      <td class="num">${r.preco ? dinheiro(r.preco) : "—"}${variacao(r)}</td>
+      <td class="num"${r.mm ? ' title="MM: Qtde mín × preço"' : ""}>${r.total ? dinheiro(r.total) : "—"}</td>
+      <td class="h-req">
+        <a href="#/lista/${esc(r.l.id)}" title="Abrir a requisição"><span class="etiqueta tipo">${r.mm ? "MM" : "RM"}</span> ${esc(r.l.titulo)}</a>
+        ${mostraDesc ? `<div class="h-desc" title="${esc(desc)}">${esc(curto(desc, 90))}</div>` : ""}
+        ${(proj || concl) ? `<div class="h-tags">${proj ? `<span class="etiqueta">${esc(proj)}</span>` : ""}${concl ? '<span class="etiqueta ok">✔ concluída</span>' : ""}</div>` : ""}
+      </td>
+      <td class="h-autor">${esc(r.autor || "—")}</td>
+    </tr>`;
+  };
+
+  function desenhar() {
+    const vis = res.slice(0, pagina * HIST_PAGINA);
+    const termos = f.cod ? [] : norm(f.nome).trim().split(/\s+/).filter(Boolean);
+    $("#h-corpo").innerHTML = vis.map((r, k) => linha(r, termos, k > 0 && vis[k - 1].l === r.l)).join("")
+      || `<tr><td colspan="9" class="h-vazio">${linhas.length
+          ? "Nenhum lançamento encontrado com esse filtro."
+          : `Nenhum item lançado ainda nas requisições da ${esc(UNI().nome)}.`}</td></tr>`;
+    $("#h-conta").textContent = res.length ? `Mostrando ${vis.length} de ${res.length.toLocaleString("pt-BR")} lançamento(s)` : "";
+    const resta = res.length - vis.length;
+    $("#h-mais").hidden = resta <= 0;
+    $("#h-mais").textContent = `Mostrar mais ${Math.min(HIST_PAGINA, resta)}`;
+  }
+  /* digitou no código → nome bloqueado; digitou no nome → código bloqueado */
+  function travas() {
+    const porCod = inCod.value.length > 0, porNome = !porCod && inNome.value.length > 0;
+    inNome.readOnly = porCod; inCod.readOnly = porNome;
+    $("#hc-nome").classList.toggle("bloq", porCod);
+    $("#hc-cod").classList.toggle("bloq", porNome);
+    inCod.placeholder = porNome ? "Limpe o nome" : "Ex.: 952420";
+    inNome.placeholder = porCod ? "Bloqueado — limpe o código para buscar pelo nome" : "Termos do nome, em qualquer ordem… ex.: difus 2x110";
+    $("#hl-cod").hidden = !inCod.value;
+    $("#hl-nome").hidden = !inNome.value;
+  }
+  function atualizar() {
+    travas();
+    res = filtrarHistorico(linhas, f);
+    pagina = 1;
+    $("#h-resumo").innerHTML = resumoHistorico(res, f);
+    desenhar();
+    try { sessionStorage.setItem("rq.hist", JSON.stringify(f)); } catch { /* sem sessão: segue */ }
+  }
+  const limpar = (campo) => {
+    if (campo === inCod) f.cod = ""; else f.nome = "";
+    campo.value = "";
+    atualizar();
+    campo.focus();
+  };
+  inCod.oninput = () => { if (!inCod.readOnly) { f.cod = inCod.value; atualizar(); } };
+  inNome.oninput = () => { if (!inNome.readOnly) { f.nome = inNome.value; atualizar(); } };
+  for (const el of [inCod, inNome]) {
+    const outro = el === inCod ? "NOME" : "CÓDIGO";
+    const avisar = (e) => {
+      if (!el.readOnly) return;
+      if (e.type === "keydown" && e.key.length !== 1 && e.key !== "Backspace" && e.key !== "Delete") return;
+      toast(`🔒 Campo bloqueado: limpe o ${outro} para buscar por aqui.`);
+    };
+    el.addEventListener("keydown", avisar);
+    el.addEventListener("mousedown", avisar);
+    el.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && el.value && !el.readOnly) { e.preventDefault(); limpar(el); }
+    });
+  }
+  $("#hl-cod").onclick = () => limpar(inCod);
+  $("#hl-nome").onclick = () => limpar(inNome);
+  $("#h-espacos").onchange = (e) => { f.espacos = e.target.checked; atualizar(); };
+  $("#h-tipo").onchange = (e) => { f.tipo = e.target.value; atualizar(); };
+  $("#h-mais").onclick = () => { pagina++; desenhar(); };
+  /* chip de código no resumo: mostra só aquele código */
+  $("#h-resumo").onclick = (e) => {
+    const b = e.target.closest("[data-cod]"); if (!b) return;
+    f.nome = ""; inNome.value = "";
+    f.cod = b.dataset.cod; inCod.value = f.cod;
+    atualizar(); inCod.focus();
+  };
+
+  atualizar();
+  const foco = f.nome ? inNome : inCod;
+  foco.focus();
+  foco.setSelectionRange(foco.value.length, foco.value.length);
+}
+
 function baixarBlob(blob, nome) {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
@@ -1935,11 +2451,12 @@ function ligarModais() {
     e.target.value = "";
   };
 
+  /* backup: só a unidade em uso (a outra não é exportada nem afetada) */
   $("#btn-exportar-backup").onclick = () => {
-    const blob = new Blob([JSON.stringify({ projetos, listas, precos }, null, 1)], { type: "application/json" });
+    const blob = new Blob([JSON.stringify({ unidade: UN, projetos: projetosUN(), listas: listasUN(), precos }, null, 1)], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `backup-requisicoes-${hoje()}.json`;
+    a.download = `backup-requisicoes-${UNI().sigla}-${hoje()}.json`;
     a.click();
   };
   $("#arquivo-backup").onchange = async (e) => {
@@ -1947,13 +2464,19 @@ function ligarModais() {
     if (!f) return;
     try {
       const j = JSON.parse(await f.text());
-      if (!confirm("Importar backup? Isso SUBSTITUI as listas, projetos e preços atuais deste navegador.")) return;
-      projetos = j.projetos || []; listas = j.listas || []; precos = j.precos || {};
+      const doArquivo = valorUnidade(j.unidade);
+      if (doArquivo && doArquivo !== UN && !confirm(`Este backup é da ${nomeUnidade(doArquivo)}. Importar mesmo assim para a ${UNI().nome}?`)) return;
+      if (!confirm(`Importar backup? Isso SUBSTITUI as listas e projetos da ${UNI().nome} neste navegador (a outra unidade não é afetada). Os preços do arquivo entram na memória de preços.`)) return;
+      const novosP = (j.projetos || []).map(p => ({ ...p, unidade: UN }));
+      const novasL = (j.listas || []).map(l => ({ ...l, unidade: UN }));
+      projetos = projetos.filter(p => unidadeDoRegistro(p) !== UN).concat(novosP);
+      listas = listas.filter(l => unidadeDoRegistro(l) !== UN).concat(novasL);
+      precos = { ...precos, ...(j.precos || {}) };
       salvarTudo(); render();
       if (sb) {
-        for (const p of projetos) await nuvemSalvarProjeto(p);
-        for (const l of listas) await nuvemSalvarLista(l);
-        for (const [chave, reg] of Object.entries(precos)) await nuvemSalvarPreco(chave, reg);
+        for (const p of novosP) await nuvemSalvarProjeto(p);
+        for (const l of novasL) await nuvemSalvarLista(l);
+        for (const [chave, reg] of Object.entries(j.precos || {})) await nuvemSalvarPreco(chave, reg);
       }
       alert("Backup importado" + (sb ? " e enviado para a nuvem." : "."));
     } catch (err) { alert("Arquivo inválido: " + err.message); }
@@ -2021,6 +2544,7 @@ ligarModais();
 render();                                   // abre com o cache local na hora
 $("#btn-sair").onclick = async () => { if (sb) await sb.auth.signOut(); location.reload(); };
 ligarLogin(() => {                          // dados só depois de autenticado
+  render();                                 // já na unidade do usuário logado
   carregarBanco();
   carregarNuvem();
 });

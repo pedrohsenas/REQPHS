@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Recursos Materiais UIS 3</title>
+<title>Recursos Materiais</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -21,7 +21,7 @@
 <div id="tela-login" class="no-print" hidden>
   <form class="login-caixa" id="form-login">
     <img class="logo-img" src="favicon.svg" alt="Lar">
-    <strong style="font-size:17px">Recursos Materiais UIS 3</strong>
+    <strong style="font-size:17px" id="login-titulo">Recursos Materiais</strong>
     <input type="email" id="email" placeholder="E-mail" autocomplete="username" hidden>
     <input type="password" id="senha" placeholder="Senha" autocomplete="current-password" autofocus>
     <p class="login-erro" id="login-erro"></p>
@@ -32,10 +32,12 @@
 <header id="topo" class="no-print">
   <div class="marca">
     <img class="logo-img" src="favicon.svg" alt="" onerror="this.remove()">
-    <strong>Recursos Materiais UIS 3</strong>
+    <strong>Recursos Materiais</strong>
+    <span id="unidade-ctl" class="unidade-ctl"></span>
   </div>
   <nav>
     <a href="#/" class="nav-link">Início</a>
+    <a href="#/historico" class="nav-link" title="Todos os itens já lançados nas requisições, com preços — filtro por código ou nome">Histórico por item</a>
     <button id="btn-importar-banco" class="btn sec" title="Importar/atualizar o banco de itens (.xlsx da empresa)">Banco de itens</button>
     <a class="btn sec" href="#/cadastros" style="text-decoration:none" title="Assinantes e setores">Cadastros</a>
     <a class="btn sec" href="#/arquivados" style="text-decoration:none" title="Projetos concluídos">📦 Arquivados</a>
@@ -66,7 +68,8 @@
 <div id="modal-backup" class="modal no-print" hidden>
   <div class="modal-caixa">
     <h2>Backup das listas</h2>
-    <p>As listas, projetos e o histórico de preços ficam salvos neste navegador. Exporte um arquivo de backup para guardar ou levar para outro computador.</p>
+    <p>As listas, projetos e o histórico de preços ficam salvos neste navegador. Exporte um arquivo de backup para guardar ou levar para outro computador.
+      O backup leva <strong>somente a unidade em uso</strong> (UIS ou UIS 3); a outra não é exportada nem alterada.</p>
     <div class="modal-acoes">
       <button class="btn" id="btn-exportar-backup">Exportar backup (.json)</button>
       <label class="btn sec" for="arquivo-backup" style="cursor:pointer">Importar backup</label>

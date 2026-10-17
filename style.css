@@ -542,6 +542,107 @@ body.modo-pdf tr.d-item.zebra input{background:transparent}
 
 
 /* ============================================================
+   UNIDADES (UIS / UIS 3), CADASTROS e HISTÓRICO POR ITEM
+   (só tela — não afeta folha, PDF nem impressão)
+   ============================================================ */
+/* unidade no topo: selo fixo ou seletor (para quem pode alternar) */
+.unidade-ctl{display:inline-flex}
+.unidade-chip, select.unidade-sel{
+  font:inherit; font-size:12px; font-weight:800; letter-spacing:.04em; line-height:1.3;
+  background-color:var(--grafite); color:#fff; border:none; border-radius:6px; padding:4px 9px;
+}
+select.unidade-sel{
+  cursor:pointer; padding:4px 24px 4px 9px; -webkit-appearance:none; appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='white' stroke-width='1.6'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right 8px center;
+}
+select.unidade-sel:hover{filter:brightness(1.12)}
+select.unidade-sel option{background:#fff; color:var(--tinta); font-weight:600}
+body[data-unidade="UIS"] .unidade-chip, body[data-unidade="UIS"] select.unidade-sel,
+body[data-unidade="UIS"] .pagina-titulo .etiqueta.tipo{background-color:var(--vermelho); border-color:var(--vermelho)}
+.pagina-titulo .etiqueta.tipo{font-size:12px; padding:3px 10px; border-radius:6px}
+
+/* menu: tela atual */
+#topo nav .nav-link.ativo, #topo nav a.btn.sec.ativo{background:var(--vermelho-suave); color:var(--vermelho-escuro)}
+
+/* cadastros */
+.cad-intro{margin:0 0 6px}
+.cad-nota{font-size:12px; color:var(--cinza); margin:0 0 8px; line-height:1.5}
+#cad-ver{font-size:12.5px; padding:7px 10px}
+select.sel-un{font-size:12px; padding:4px 8px; font-weight:600; border-width:1px}
+.etiqueta.sugerido{background:var(--amarelo-suave); border-color:#ead98f; color:#7d6200}
+.form-cad .campo{display:flex; flex-direction:column; gap:5px; margin-bottom:13px}
+.form-cad label{font-size:12px; font-weight:600; color:var(--grafite)}
+.form-cad input, .form-cad select{width:100%}
+.form-cad small{font-size:11.5px; color:var(--cinza); line-height:1.45}
+.form-erro{color:var(--vermelho); font-size:12px; min-height:16px; margin:0}
+
+/* histórico por item: filtros */
+.h-total{font-size:12px; color:var(--cinza); font-variant-numeric:tabular-nums}
+.h-filtros{
+  display:flex; gap:12px; align-items:flex-end; flex-wrap:wrap; margin-bottom:12px;
+  background:var(--branco); border:1px solid var(--linha); border-radius:var(--raio); box-shadow:var(--sombra); padding:12px 14px;
+}
+.h-campo{display:flex; flex-direction:column; gap:5px; position:relative; min-width:0}
+.h-campo.cod{flex:0 1 210px}
+.h-campo.nome{flex:1 1 340px}
+.h-campo label{font-size:11px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; color:var(--cinza)}
+.h-campo input{width:100%; font-size:15px; padding:9px 34px 9px 11px}
+.h-campo.cod input{font-variant-numeric:tabular-nums; font-weight:600}
+.h-limpar{
+  position:absolute; right:6px; bottom:8px; border:none; background:none; color:var(--cinza);
+  cursor:pointer; font-size:13px; padding:4px 7px; border-radius:5px; line-height:1;
+}
+.h-limpar:hover{background:var(--fundo); color:var(--tinta)}
+.h-limpar[hidden]{display:none}
+.h-campo.bloq input{background:var(--fundo); color:var(--cinza-claro); border-style:dashed; cursor:not-allowed}
+.h-campo.bloq input:focus{box-shadow:none; border-color:var(--linha)}
+.h-campo.bloq label::after{content:" · bloqueado 🔒"; letter-spacing:0; text-transform:none; font-weight:600}
+.h-ou{font-size:11px; color:var(--cinza-claro); padding-bottom:12px; font-weight:600}
+.h-opcoes{display:flex; gap:12px; align-items:center; padding-bottom:5px; font-size:12px; color:var(--cinza); flex-wrap:wrap}
+.h-opcoes .check{margin:0}
+.h-opcoes select{font-size:12.5px; padding:7px 9px}
+
+/* histórico por item: resumo e tabela */
+.h-resumo{font-size:12.5px; color:var(--cinza); margin:0 2px 10px; line-height:1.75}
+.h-resumo strong{color:var(--tinta); font-variant-numeric:tabular-nums}
+.h-resumo .h-item{color:var(--tinta); font-weight:700; font-size:13.5px}
+.h-chips{margin-top:2px}
+.h-chip{
+  border:1px solid var(--linha); background:var(--branco); border-radius:20px; padding:1px 9px; margin:3px 4px 0 0;
+  font:inherit; font-size:11.5px; cursor:pointer; color:var(--tinta); font-variant-numeric:tabular-nums;
+}
+button.h-chip:hover{border-color:var(--vermelho); color:var(--vermelho)}
+.h-chip b{color:var(--vermelho)}
+.h-chip.mudo{cursor:default; color:var(--cinza)}
+.h-mais-cod{font-size:11.5px}
+.h-rolagem{overflow-x:auto; border-radius:var(--raio); box-shadow:var(--sombra)}
+table.app.hist{box-shadow:none; min-width:1100px}
+table.hist td{vertical-align:top}
+table.hist th.num{text-align:right}
+table.hist tr:has(+ tr.h-rep) td{border-bottom-color:#efeef1}   /* mesma requisição: separador mais leve */
+table.hist tr.h-rep .h-req a{font-weight:500; color:var(--cinza)}
+table.hist tr.h-rep .h-req .etiqueta.tipo{opacity:.55}
+table.hist .h-data{white-space:nowrap; font-variant-numeric:tabular-nums; color:var(--cinza)}
+table.hist .h-cod{font-weight:700; color:var(--vermelho); white-space:nowrap; font-variant-numeric:tabular-nums}
+table.hist .h-nome{min-width:240px; line-height:1.4}
+table.hist .h-un{color:var(--cinza); white-space:nowrap}
+table.hist .h-req{min-width:220px; max-width:340px}
+table.hist .h-req a{color:var(--tinta); font-weight:600; text-decoration:none; line-height:1.4}
+table.hist .h-req a:hover{color:var(--vermelho)}
+table.hist .h-req .etiqueta.tipo{font-size:9.5px; padding:1px 6px; vertical-align:1px}
+table.hist .h-autor{font-size:12px; white-space:nowrap}
+table.hist mark{background:#ffe58a; color:inherit; border-radius:2px; padding:0}
+.h-desc{font-size:11.5px; color:var(--cinza); margin-top:2px; line-height:1.4}
+.h-tags{margin-top:4px; display:flex; gap:4px; flex-wrap:wrap}
+.h-var{display:inline-block; font-size:10.5px; font-weight:700; margin-left:5px; padding:0 5px; border-radius:4px; vertical-align:1px}
+.h-var.sobe{color:var(--vermelho-escuro); background:var(--vermelho-suave)}
+.h-var.desce{color:var(--verde); background:var(--verde-suave)}
+.h-var.igual{color:var(--cinza); background:var(--fundo)}
+td.h-vazio{text-align:center; color:var(--cinza); padding:34px 12px !important}
+.h-rodape{display:flex; gap:14px; align-items:center; justify-content:center; margin:14px 0 4px; font-size:12px; color:var(--cinza)}
+
+/* ============================================================
    MOBILE — celular e tablet
    ============================================================ */
 @media (max-width:900px){
@@ -579,4 +680,10 @@ body.modo-pdf tr.d-item.zebra input{background:transparent}
   .ed-ultima{width:100%}
   .zoom-modo[data-modo="pagina"]{display:none}
   .ed-mesa{padding:8px; overflow-x:auto; -webkit-overflow-scrolling:touch}
+
+  /* histórico por item e cadastros */
+  .h-campo.cod, .h-campo.nome{flex:1 1 100%}
+  .h-ou{display:none}
+  .h-campo input{font-size:16px}
+  table.app.cad{display:block; overflow-x:auto}
 }
