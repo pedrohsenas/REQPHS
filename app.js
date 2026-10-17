@@ -44,7 +44,7 @@ const TODOS = "TODOS";
 const UNIDADES = {
   UIS3: { id: "UIS3", nome: "UIS 3", sigla: "UIS3", local: "185 - UIS 3",
           padrao: { solicitante: P.pedro, supervisor: P.alex, gerente: P.jaisson, corporativo: P.ademilson } },
-  UIS:  { id: "UIS",  nome: "UIS",   sigla: "UIS",  local: "UIS",          // ← trocar pelo código do LOCAL da UIS (ex.: "1xx - UIS")
+  UIS:  { id: "UIS",  nome: "UIS",   sigla: "UIS",  local: "12 - UIS",
           padrao: { solicitante: "", supervisor: "", gerente: "Mauro Cardoso de Souza", corporativo: P.ademilson } },
 };
 const OPCOES_UNIDADE = [["UIS", "UIS"], ["UIS3", "UIS 3"], [TODOS, "Todos"]];
@@ -75,14 +75,20 @@ const setoresUN  = (un = UN) => (setores || []).filter(s => naUnidade(unidadeDoS
 const projetosUN = (un = UN) => projetos.filter(p => unidadeDoRegistro(p) === un);
 const listasUN   = (un = UN) => listas.filter(l => unidadeDoRegistro(l) === un);
 
-/* quem pode alternar: pessoas "Todos" e quem não tem vínculo de login */
-const podeTrocarUnidade = () => !usuarioAtual || unidadeDaPessoa(usuarioAtual) === TODOS;
+/* Acesso às duas unidades para teste/monitoramento, SEM aparecer como pessoa da outra:
+   o cadastro diz onde o nome aparece; esta lista diz quem pode alternar.
+   (dá para acrescentar e-mails também em config.js: acessoDuplo: ["…"]) */
+const ACESSO_DUPLO = ["projetoseletrica.uis3@lar.ind.br", ...((window.CONFIG_NUVEM || {}).acessoDuplo || [])]
+  .map(e => String(e).trim().toLowerCase());
+const temAcessoDuplo = () => !!emailSessao && ACESSO_DUPLO.includes(String(emailSessao).trim().toLowerCase());
+/* quem pode alternar: acesso duplo, pessoas "Todos" e quem não tem vínculo de login */
+const podeTrocarUnidade = () => temAcessoDuplo() || !usuarioAtual || unidadeDaPessoa(usuarioAtual) === TODOS;
 const unidadeDaUrl = () => { const u = valorUnidade(new URLSearchParams(location.search).get("u")); return UNIDADES[u] ? u : ""; };
 function resolverUnidade() {
-  const fixa = usuarioAtual ? unidadeDaPessoa(usuarioAtual) : TODOS;
-  if (UNIDADES[fixa]) return fixa;
+  const propria = usuarioAtual ? unidadeDaPessoa(usuarioAtual) : TODOS;
+  if (UNIDADES[propria] && !temAcessoDuplo()) return propria;      // preso à própria unidade
   const salva = valorUnidade(localStorage.getItem("rq.unidade"));
-  return unidadeDaUrl() || (UNIDADES[salva] ? salva : "UIS3");
+  return unidadeDaUrl() || (UNIDADES[salva] ? salva : (UNIDADES[propria] ? propria : "UIS3"));
 }
 function gravarUnidadeNaUrl(u) {
   try {
@@ -125,7 +131,7 @@ function desenharMarca() {
   if (ctl.dataset.chave === chave) return;
   ctl.dataset.chave = chave;
   ctl.innerHTML = podeTrocarUnidade()
-    ? `<select id="sel-unidade" class="unidade-sel" title="Trocar de unidade — cada uma tem suas requisições, projetos e cadastros">
+    ? `<select id="sel-unidade" class="unidade-sel" title="${temAcessoDuplo() ? "Acesso às duas unidades (teste/monitoramento). " : ""}Trocar de unidade — cada uma tem suas requisições, projetos e cadastros">
         ${Object.values(UNIDADES).map(u => `<option value="${u.id}" ${u.id === UN ? "selected" : ""}>${u.nome}</option>`).join("")}
       </select>`
     : `<span class="unidade-chip" title="Sua unidade">${esc(nome)}</span>`;

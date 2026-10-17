@@ -9,6 +9,8 @@ Site estático (sem servidor) para criar listas de materiais a partir do banco d
 - Cada unidade só enxerga o que é dela e o que está marcado como **Todos**.
 - A unidade em uso fica na URL: `…/?u=uis3` ou `…/?u=uis`. Dá para deixar as duas abertas em abas lado a lado.
 - Quem faz login com um e-mail cadastrado numa unidade só fica preso a ela. Quem está marcado como **Todos** troca de unidade pelo seletor no topo.
+- **Acesso duplo** (teste/monitoramento): os e-mails da lista `ACESSO_DUPLO` em `app.js` (ou em `acessoDuplo` no `config.js`) podem alternar entre as duas unidades sem aparecer como pessoa da outra. Hoje: `projetoseletrica.uis3@lar.ind.br`.
+- LOCAL padrão nas requisições: UIS 3 → `185 - UIS 3`; UIS → `12 - UIS`.
 
 ## Supabase
 
