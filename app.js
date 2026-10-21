@@ -1428,7 +1428,7 @@ function telaEditor(app, id) {
       <button class="btn sec ed-status" id="btn-status"></button>
       <button class="ed-salvo" id="ed-salvo" data-estado="salvo" title="Clique para salvar agora"></button>
       <span class="espacador"></span>
-      <button class="btn sec" id="btn-resumo-mg" title="Excel sem formatação para copiar e colar: Código, Descrição, Quantidade, Unidade, Valor unitário, Valor total">📊 Resumo MG</button>
+      <button class="btn sec" id="btn-resumo-mg" title="Excel sem formatação para copiar e colar: Código, Descrição, 4 colunas em branco, Quantidade, Unidade, Valor unitário, Valor total">📊 Resumo MG</button>
       <button class="btn sec" id="btn-imprimir" title="Abre a impressão do navegador">🖨️ Imprimir</button>
       <button class="btn" id="btn-pdf" title="Baixa o PDF direto (A4 paisagem), sem abrir a impressão">⬇ PDF</button>
       <a class="btn sec" href="#/">← Voltar</a>
@@ -2436,21 +2436,23 @@ async function gerarPdfVetorial(clone, info = {}) {
 
 /* ============================================================
    RESUMO MG — Excel cru (sem formatação) para copiar e colar:
-   CÓDIGO | DESCRIÇÃO | QUANTIDADE | UNIDADE | VALOR UNITÁRIO | VALOR TOTAL
+   CÓDIGO | DESCRIÇÃO | 4 colunas em branco (C–F, preenchidas no destino) |
+   QUANTIDADE | UNIDADE | VALOR UNITÁRIO | VALOR TOTAL
    MM usa a Qtde mínima (mesma regra do total do formulário).
    ============================================================ */
 function baixarResumoMG(l) {
   const mm = l.tipo === "MM";
-  const cab = ["CÓDIGO", "DESCRIÇÃO", "QUANTIDADE", "UNIDADE", "VALOR UNITÁRIO", "VALOR TOTAL"];
+  const VAZIAS = ["", "", "", ""];                    // C–F: completadas depois na planilha de destino
+  const cab = ["CÓDIGO", "DESCRIÇÃO", ...VAZIAS, "QUANTIDADE", "UNIDADE", "VALOR UNITÁRIO", "VALOR TOTAL"];
   const linhas = (l.itens || []).map(i => {
     const q = mm ? (+i.qtdMin || 0) : (+i.qtd || 0), p = +i.preco || 0;
     const cod = String(i.codigo ?? "").trim();
-    return [/^\d+$/.test(cod) ? Number(cod) : cod, i.descricao || "", q, i.un || "", p, Math.round(q * p * 100) / 100];
+    return [/^\d+$/.test(cod) ? Number(cod) : cod, i.descricao || "", ...VAZIAS, q, i.un || "", p, Math.round(q * p * 100) / 100];
   });
   const nome = "Resumo_MG_" + (l.titulo || "lista").replace(/[\\/:*?"<>|]/g, "-");
   if (window.XLSX) {
     const ws = XLSX.utils.aoa_to_sheet([cab, ...linhas]);
-    ws["!cols"] = [{ wch: 10 }, { wch: 52 }, { wch: 12 }, { wch: 9 }, { wch: 15 }, { wch: 15 }];
+    ws["!cols"] = [{ wch: 10 }, { wch: 52 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 9 }, { wch: 15 }, { wch: 15 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Resumo MG");
     XLSX.writeFile(wb, nome + ".xlsx");
