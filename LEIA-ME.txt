@@ -1,0 +1,10 @@
+RQ Sans (RQSans-Regular.ttf / RQSans-Bold.ttf)
+
+Fonte usada só no PDF baixado pelo botão "PDF". É uma versão reduzida
+(apenas caracteres latinos, sem hinting) da fonte Carlito, que tem as
+mesmas medidas da Calibri usada no formulário oficial.
+
+Original: Carlito — Copyright 2010-2013 tyPoland Lukasz Dziedzic,
+https://github.com/googlefonts/carlito — SIL Open Font License 1.1 (OFL.txt).
+Por ser uma versão modificada, foi renomeada: "Carlito" é Nome de Fonte
+Reservado pela licença. Continua sob a mesma licença OFL 1.1.

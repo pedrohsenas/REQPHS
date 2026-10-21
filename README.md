@@ -19,3 +19,10 @@ Antes de usar as unidades na nuvem, rode **uma vez** o arquivo `supabase_unidade
 ## Histórico por item
 
 No menu superior, **Histórico por item** lista todos os itens já lançados nas requisições da unidade, da data mais recente para a mais antiga. Filtre por **código** (pelo começo do código) ou por **nome** (termos em qualquer ordem). Ao digitar em um campo, o outro fica bloqueado. A tela mostra 30 linhas por vez.
+
+## Botões da requisição
+
+- **⬇ PDF** baixa o PDF direto, em A4 paisagem, sem abrir a impressão. O arquivo é vetorial, com texto pesquisável, e tem cerca de 70 kB. Listas longas quebram de página entre as linhas, como na impressão. Precisa da pasta `fontes/` publicada junto com o site. As bibliotecas (pdf-lib) carregam do jsDelivr no primeiro clique. Se algo falhar, o botão oferece abrir a impressão.
+- **🖨️ Imprimir** continua abrindo a impressão do navegador.
+- **📊 Resumo MG** baixa um Excel sem formatação para copiar e colar: DESCRIÇÃO, QUANTIDADE, UNIDADE, VALOR UNITÁRIO, VALOR TOTAL. No MM, a quantidade usada é a Qtde mínima.
+- **▲ ▼ ✕** ao lado de cada item sobem, descem ou removem o item. Não aparecem na impressão nem no PDF, e a mudança de ordem fica no histórico de edições.

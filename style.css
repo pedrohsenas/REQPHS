@@ -265,6 +265,17 @@ textarea.lat-notas{width:100%; min-height:260px; resize:vertical; line-height:1.
 .ed-mesa{flex:1; min-height:0; background:var(--mesa); padding:18px; scrollbar-gutter:stable}
 .ed-mesa .folha{margin:0 auto}
 
+/* coluna de controles da folha (só na tela): subir · descer · remover */
+.ed col.cX{width:16mm}
+.ed .folha tr td.d-remover{background:none}
+.ed .folha .ord-ctl{display:flex; align-items:center; justify-content:center; gap:1px}
+.ed .folha td.d-remover .ord-ctl button{width:15px; height:14px; padding:0; border-radius:3px; font-size:10px; line-height:14px}
+.ed .folha td.d-remover .ord-ctl button[data-subir], .ed .folha td.d-remover .ord-ctl button[data-descer]{color:var(--cinza); font-size:8.5px}
+.ed .folha td.d-remover .ord-ctl button:hover:not([disabled]){background:var(--fundo); color:var(--tinta)}
+.ed .folha td.d-remover .ord-ctl button[data-remover]:hover{color:var(--vermelho); background:var(--vermelho-suave)}
+.ed .folha td.d-remover .ord-ctl button:focus-visible{outline:1.5px solid var(--vermelho)}
+.ed .folha td.d-remover .ord-ctl button[disabled]{opacity:.22; cursor:default}
+
 /* campo SETOR fora do cadastro (só na tela) */
 .folha input.fora-cadastro{outline:1.5px dashed #d99a00; outline-offset:-2px}
 

@@ -825,6 +825,8 @@ function diffLista(a, b) {
     }
   }
   for (const [k, ia] of ma) if (!mb.has(k)) mud.push({ k: "-:" + k, t: "Item removido", de: descItemLog(ia) });
+  if (!mud.some(m => m.k[0] === "+" || m.k[0] === "-") && [...ma.keys()].join("\n") !== [...mb.keys()].join("\n"))
+    mud.push({ k: "f:ordem", t: "Ordem dos itens alterada" });
   return mud;
 }
 /* junta mudanças novas numa entrada existente (de → para final; incluído+removido se anulam) */
@@ -1426,8 +1428,9 @@ function telaEditor(app, id) {
       <button class="btn sec ed-status" id="btn-status"></button>
       <button class="ed-salvo" id="ed-salvo" data-estado="salvo" title="Clique para salvar agora"></button>
       <span class="espacador"></span>
-      <button class="btn sec" id="btn-imprimir">🖨️ Imprimir</button>
-      <button class="btn" id="btn-pdf">📤 PDF</button>
+      <button class="btn sec" id="btn-resumo-mg" title="Excel sem formatação para copiar e colar: Descrição, Quantidade, Unidade, Valor unitário, Valor total">📊 Resumo MG</button>
+      <button class="btn sec" id="btn-imprimir" title="Abre a impressão do navegador">🖨️ Imprimir</button>
+      <button class="btn" id="btn-pdf" title="Baixa o PDF direto (A4 paisagem), sem abrir a impressão">⬇ PDF</button>
       <a class="btn sec" href="#/">← Voltar</a>
     </div>
 
@@ -1689,8 +1692,29 @@ function telaEditor(app, id) {
     return clone;
   }
 
-  /* exportar PDF = impressão vetorial salva como PDF (texto pesquisável, arquivo leve) */
-  $("#btn-pdf").onclick = imprimirDocumento;
+  /* PDF: download direto, vetorial, A4 paisagem (se falhar, oferece a impressão) */
+  $("#btn-pdf").onclick = async () => {
+    const bt = $("#btn-pdf");
+    if (bt.disabled) return;
+    const rotulo = bt.textContent;
+    bt.disabled = true; bt.textContent = "Gerando PDF…";
+    try {
+      const bytes = await gerarPdfVetorial(clonarFolhaParaPdf(false), {
+        titulo: nomePdf(), autor: L.autor || L.solicitante || "", criador: "Recursos Materiais " + UNIDADES[UL].nome,
+      });
+      baixarBlob(new Blob([bytes], { type: "application/pdf" }), nomePdf() + ".pdf");
+      toast("📄 PDF baixado — A4 paisagem");
+    } catch (e) {
+      console.warn("pdf:", e);
+      if (confirm(`Não foi possível gerar o PDF direto (${e.message}).\n\nAbrir a impressão para salvar como PDF?`)) imprimirDocumento();
+    } finally {
+      bt.disabled = false; bt.textContent = rotulo;
+    }
+  };
+  $("#btn-resumo-mg").onclick = () => {
+    if (!L.itens.length) { toast("A lista ainda não tem itens."); return; }
+    baixarResumoMG(L);
+  };
 
   /* ---------- zoom da folha: ajustar à largura (padrão), página inteira ou manual ---------- */
   const mesa = $("#ed-mesa"), folhaEl = $("#folha");
@@ -1872,7 +1896,7 @@ function telaEditor(app, id) {
         <td class="d-qtd"><input data-qtd="${idx}" value="${i.qtd ? fmtQtd(i.qtd) : ""}" inputmode="decimal"></td>
         <td class="d-preco"><span>R$</span><input data-preco="${idx}" value="${i.preco ? fmtBR.format(i.preco) : ""}" inputmode="decimal" style="text-align:right"></td>
         <td class="d-num">${(i.qtd && i.preco) ? "R$ " + fmtBR.format(i.qtd * i.preco) : ""}</td>
-        <td class="d-remover no-print"><button data-remover="${idx}" title="Remover">✕</button></td>
+        <td class="d-remover no-print"><span class="ord-ctl"><button data-subir="${idx}" title="Subir item"${idx === 0 ? " disabled" : ""}>▲</button><button data-descer="${idx}" title="Descer item"${idx === L.itens.length - 1 ? " disabled" : ""}>▼</button><button data-remover="${idx}" title="Remover">✕</button></span></td>
       </tr>`;
     const vazias = Math.max(0, LINHAS_MIN - L.itens.length);
     const linhaVazia = `<tr class="d-item d-vazia"><td>&nbsp;</td><td></td><td></td><td></td><td></td><td></td><td class="d-remover no-print"></td></tr>`;
@@ -1982,7 +2006,7 @@ function telaEditor(app, id) {
         <td class="d-preco"><span>R$</span><input data-preco="${idx}" value="${i.preco ? fmtBR.format(i.preco) : ""}" inputmode="decimal" style="text-align:right"></td>
         <td>${(i.qtdMin && i.preco) ? `<span class="val-flex"><span>R$</span><span>${fmtBR.format(i.qtdMin * i.preco)}</span></span>` : ""}</td>
         <td class="d-just"><input data-just="${idx}" value="${esc(i.justificativa || "")}" placeholder=""></td>
-        <td class="d-remover no-print"><button data-remover="${idx}" title="Remover">✕</button></td>
+        <td class="d-remover no-print"><span class="ord-ctl"><button data-subir="${idx}" title="Subir item"${idx === 0 ? " disabled" : ""}>▲</button><button data-descer="${idx}" title="Descer item"${idx === L.itens.length - 1 ? " disabled" : ""}>▼</button><button data-remover="${idx}" title="Remover">✕</button></span></td>
       </tr>`;
 
     const ass = [L.assinaturas[0] || "", L.assinaturas[1] || "", L.assinaturas[2] || ""];
@@ -2130,6 +2154,17 @@ function telaEditor(app, id) {
         salvar(); desenharFolha();
       };
     });
+    /* sobe/desce: troca o item com o vizinho e mantém o foco no botão para cliques seguidos */
+    const mover = (i, passo) => {
+      const j = i + passo;
+      if (travada() || j < 0 || j >= L.itens.length) return;
+      [L.itens[i], L.itens[j]] = [L.itens[j], L.itens[i]];
+      salvar(); desenharFolha();
+      const alvo = $(`#folha [data-${passo < 0 ? "subir" : "descer"}="${j}"]`);
+      (alvo && !alvo.disabled ? alvo : $(`#folha [data-remover="${j}"]`))?.focus();
+    };
+    $$("#folha [data-subir]").forEach(el => { el.onclick = () => mover(+el.dataset.subir, -1); });
+    $$("#folha [data-descer]").forEach(el => { el.onclick = () => mover(+el.dataset.descer, +1); });
     $$("#folha [data-remover]").forEach(el => {
       el.onclick = () => { L.itens.splice(+el.dataset.remover, 1); salvar(); desenharFolha(); };
     });
@@ -2157,6 +2192,272 @@ function telaEditor(app, id) {
   selecionarAba(["itens", "notas", "hist"].includes(abaInicial) ? abaInicial : "itens");
   editorAtivo = { commit, focarBusca };
   if (!travada() && !corpo.classList.contains("lat-fechada")) caixa.focus();
+}
+
+/* ============================================================
+   PDF DIRETO (download) — vetorial, A4 paisagem, margens de 7 mm
+   O navegador monta o mesmo clone textual da impressão com a largura
+   útil da página (283 mm); cada fundo, borda, palavra e imagem é
+   redesenhado no PDF exatamente onde o navegador o colocou.
+   Fonte RQ Sans embutida (= Carlito reduzida; mesmas medidas da Calibri do formulário).
+   Bibliotecas e fontes só carregam no 1º clique.
+   ============================================================ */
+const LIBS_PDF = {
+  pdflib:  "https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js",
+  fontkit: "https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js",
+};
+const carregarScript = (src) => new Promise((ok, erro) => {
+  const s = document.createElement("script");
+  s.src = src; s.onload = ok; s.onerror = () => erro(new Error("sem acesso a " + src.split("/npm/")[1]));
+  document.head.appendChild(s);
+});
+let recursosPdf = null;                       // promessa única: bibliotecas + fontes
+function carregarRecursosPdf() {
+  if (!recursosPdf) recursosPdf = (async () => {
+    if (!window.PDFLib) await carregarScript(LIBS_PDF.pdflib);
+    if (!window.fontkit) await carregarScript(LIBS_PDF.fontkit).catch(() => {});   // sem ela: Helvetica
+    const ler = (u) => fetch(u).then(r => r.ok ? r.arrayBuffer() : null).catch(() => null);
+    const [reg, neg] = await Promise.all([ler("fontes/RQSans-Regular.ttf"), ler("fontes/RQSans-Bold.ttf")]);
+    return { reg, neg };
+  })().catch(e => { recursosPdf = null; throw e; });
+  return recursosPdf;
+}
+
+async function gerarPdfVetorial(clone, info = {}) {
+  const rec = await carregarRecursosPdf();
+  const { PDFDocument, StandardFonts, rgb, LineCapStyle } = window.PDFLib;
+  const MM = 72 / 25.4, PX = 0.75;                     // pt por mm · pt por px CSS
+  const PAG_L = 297 * MM, PAG_A = 210 * MM, MARG = 7 * MM;
+  const AREA_A = (PAG_A - 2 * MARG) / PX;              // altura útil em px CSS (≈ 741)
+
+  /* 1) clone fora da tela, na largura útil da página (igual à impressão) */
+  const caixa = document.createElement("div");
+  caixa.className = "no-print";
+  caixa.style.cssText = "position:fixed;left:-30000px;top:0;width:283mm;background:#fff;pointer-events:none";
+  clone.removeAttribute("id");
+  clone.style.width = "283mm"; clone.style.minHeight = "0";
+  caixa.appendChild(clone);
+  document.body.appendChild(caixa);
+  try {
+    await Promise.all([...clone.querySelectorAll("img")].map(im => im.complete ? 0
+      : new Promise(ok => { im.onload = im.onerror = ok; setTimeout(ok, 3000); })));
+    if (document.fonts && document.fonts.ready) await document.fonts.ready;
+
+    const o = clone.getBoundingClientRect();
+    const X = (x) => x - o.left, Y = (y) => y - o.top;
+    const cor = (c) => {
+      const m = /rgba?\(([^)]+)\)/.exec(c || ""); if (!m) return null;
+      const [r, g, b, a = 1] = m[1].split(/[\s,/]+/).filter(Boolean).map(Number);
+      return a === 0 ? null : { r: r / 255, g: g / 255, b: b / 255 };
+    };
+    const fundos = [], linhas = [], palavras = [], imagens = [];
+
+    /* 2) fundos, bordas e imagens */
+    for (const el of [clone, ...clone.querySelectorAll("*")]) {
+      const st = getComputedStyle(el);
+      if (st.display === "none" || st.visibility === "hidden") continue;
+      const r = el.getBoundingClientRect();
+      if (!r.width && !r.height) continue;
+      const x1 = X(r.left), y1 = Y(r.top), x2 = X(r.right), y2 = Y(r.bottom);
+      const bg = cor(st.backgroundColor);
+      if (bg && !(bg.r === 1 && bg.g === 1 && bg.b === 1)) fundos.push({ x1, y1, x2, y2, c: bg });
+      /* célula de tabela com bordas colapsadas: a linha fica centrada na aresta;
+         a própria tabela e os demais elementos: borda por dentro do retângulo */
+      const colapsa = /^(TD|TH)$/.test(el.tagName) && st.borderCollapse === "collapse";
+      for (const [lado, horiz] of [["Top", 1], ["Bottom", 1], ["Left", 0], ["Right", 0]]) {
+        const w = parseFloat(st[`border${lado}Width`]);
+        const est = st[`border${lado}Style`];
+        if (!w || est === "none" || est === "hidden") continue;
+        const c = cor(st[`border${lado}Color`]); if (!c) continue;
+        const d = colapsa ? 0 : w / 2;
+        const cap = colapsa;                                                   // cantos da grade fechados
+        if (horiz) { const y = lado === "Top" ? y1 + d : y2 - d; linhas.push({ x1, y1: y, x2, y2: y, w, c, cap }); }
+        else { const x = lado === "Left" ? x1 + d : x2 - d; linhas.push({ x1: x, y1, x2: x, y2, w, c, cap }); }
+      }
+      if (el.tagName === "IMG" && el.complete && el.naturalWidth) imagens.push({ el, x1, y1, x2, y2 });
+    }
+
+    /* 3) texto: palavra por palavra, na posição que o navegador calculou */
+    const recortes = new Map();
+    const recorteDe = (el) => {                        // caixa visível (ancestrais com overflow escondido)
+      if (recortes.has(el)) return recortes.get(el);
+      let cx = { x1: -1e9, y1: -1e9, x2: 1e9, y2: 1e9, reticencias: false };
+      for (let a = el; a && a !== caixa; a = a.parentElement) {
+        const s = getComputedStyle(a);
+        if (s.overflowX !== "visible" || s.overflowY !== "visible") {
+          const r = a.getBoundingClientRect();
+          cx = { x1: Math.max(cx.x1, X(r.left)), y1: Math.max(cx.y1, Y(r.top)), x2: Math.min(cx.x2, X(r.right)),
+                 y2: Math.min(cx.y2, Y(r.bottom)), reticencias: cx.reticencias || s.textOverflow === "ellipsis" };
+        }
+      }
+      recortes.set(el, cx);
+      return cx;
+    };
+    /* linha de base de cada fonte, medida no próprio navegador */
+    const bases = {};
+    const linhaDeBase = (st) => {
+      const k = st.fontFamily + "|" + st.fontWeight;
+      if (bases[k] == null) {
+        const sp = document.createElement("span");
+        sp.style.cssText = `font-family:${st.fontFamily};font-weight:${st.fontWeight};font-size:100px;line-height:normal;white-space:nowrap`;
+        sp.textContent = "Hg";
+        const mk = document.createElement("span");
+        mk.style.cssText = "display:inline-block;width:1px;height:0;vertical-align:baseline";
+        sp.appendChild(mk); caixa.appendChild(sp);
+        const rg = document.createRange(); rg.selectNodeContents(sp.firstChild);
+        bases[k] = (mk.getBoundingClientRect().top - rg.getBoundingClientRect().top) / 100;
+        sp.remove();
+      }
+      return bases[k];
+    };
+    const rg = document.createRange();
+    const andar = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT);
+    for (let n = andar.nextNode(); n; n = andar.nextNode()) {
+      const t = n.nodeValue;
+      if (!t || !t.trim()) continue;
+      const pai = n.parentElement, st = getComputedStyle(pai);
+      if (st.visibility === "hidden") continue;
+      const fs = parseFloat(st.fontSize);
+      const base = { fs, neg: (parseInt(st.fontWeight, 10) || 400) >= 600, c: cor(st.color) || { r: 0, g: 0, b: 0 },
+                     bl: linhaDeBase(st), clip: recorteDe(pai) };
+      let p = null;
+      const fecha = () => { if (p && p.txt) palavras.push(p); p = null; };
+      for (let i = 0; i < t.length; i++) {
+        const ch = t[i];
+        if (/\s/.test(ch)) { fecha(); continue; }
+        rg.setStart(n, i); rg.setEnd(n, i + 1);
+        const cr = rg.getClientRects()[0];
+        if (!cr || !cr.width) continue;
+        if (p && Math.abs(cr.top - p.topAbs) > fs * 0.5) fecha();          // quebrou a linha
+        if (!p) p = { ...base, txt: "", topAbs: cr.top, x: X(cr.left), y: Y(cr.top), h: cr.height, dir: [] };
+        p.txt += ch; p.dir.push(X(cr.right));
+      }
+      fecha();
+    }
+
+    /* 4) páginas: quebra entre linhas das tabelas, como a impressão */
+    const H = clone.getBoundingClientRect().height;
+    const cortes = [...clone.querySelectorAll(":scope > table > tbody > tr, :scope > table > tr")]
+      .map(tr => Y(tr.getBoundingClientRect().bottom)).sort((a, b) => a - b);
+    const paginas = [];
+    for (let ini = 0; ini < H - 0.5;) {
+      let fim = H;
+      if (H - ini > AREA_A) {
+        const ok = cortes.filter(y => y > ini + 1 && y - ini <= AREA_A);
+        fim = ok.length ? ok[ok.length - 1] : ini + AREA_A;
+      }
+      paginas.push([ini, fim]); ini = fim;
+    }
+
+    /* 5) desenha */
+    const pdf = await PDFDocument.create();
+    let fReg, fNeg, embutida = false;
+    if (window.fontkit && rec.reg && rec.neg) {
+      try {
+        pdf.registerFontkit(window.fontkit);
+        /* fontes já reduzidas (~55 kB cada); o "subset" da biblioteca perde letras */
+        fReg = await pdf.embedFont(rec.reg, { subset: false });
+        fNeg = await pdf.embedFont(rec.neg, { subset: false });
+        embutida = true;
+      } catch (e) { console.warn("pdf/fonte:", e); }
+    }
+    if (!embutida) { fReg = await pdf.embedFont(StandardFonts.Helvetica); fNeg = await pdf.embedFont(StandardFonts.HelveticaBold); }
+    const textoSeguro = (txt, f) => {                  // Helvetica não tem todos os caracteres
+      if (embutida) return txt;
+      return [...txt].map(ch => { try { f.encodeText(ch); return ch; } catch { return "?"; } }).join("");
+    };
+    const pngs = new Map();
+    for (const im of imagens) {
+      if (pngs.has(im.el.src)) continue;
+      try {
+        const cv = document.createElement("canvas");
+        cv.width = im.el.naturalWidth; cv.height = im.el.naturalHeight;
+        cv.getContext("2d").drawImage(im.el, 0, 0);
+        const blob = await new Promise(ok => cv.toBlob(ok, "image/png"));
+        pngs.set(im.el.src, await pdf.embedPng(new Uint8Array(await blob.arrayBuffer())));
+      } catch (e) { pngs.set(im.el.src, null); }
+    }
+    const C = (c) => rgb(c.r, c.g, c.b);
+    for (const [y0, y1] of paginas) {
+      const pg = pdf.addPage([PAG_L, PAG_A]);
+      const px = (x) => MARG + x * PX;
+      const py = (y) => PAG_A - MARG - (y - y0) * PX;
+      for (const f of fundos) {
+        const a = Math.max(f.y1, y0), b = Math.min(f.y2, y1);
+        if (b <= a) continue;
+        pg.drawRectangle({ x: px(f.x1), y: py(b), width: (f.x2 - f.x1) * PX, height: (b - a) * PX, color: C(f.c) });
+      }
+      for (const im of imagens) {
+        const img = pngs.get(im.el.src);
+        if (!img || im.y1 < y0 - 0.5 || im.y1 >= y1) continue;
+        const w = im.x2 - im.x1, h = im.y2 - im.y1;                         // object-fit: contain
+        const k = Math.min(w / im.el.naturalWidth, h / im.el.naturalHeight);
+        const dw = im.el.naturalWidth * k, dh = im.el.naturalHeight * k;
+        const dx = im.x1 + (w - dw) / 2, dy = im.y1 + (h - dh) / 2;
+        pg.drawImage(img, { x: px(dx), y: py(dy + dh), width: dw * PX, height: dh * PX });
+      }
+      for (const l of linhas) {
+        let { x1, y1: a, x2, y2: b } = l;
+        if (a === b) { if (a < y0 - 0.5 || a > y1 + 0.5) continue; }
+        else { a = Math.max(a, y0); b = Math.min(b, y1); if (b <= a) continue; }
+        pg.drawLine({ start: { x: px(x1), y: py(a) }, end: { x: px(x2), y: py(b) },
+                      thickness: l.w * PX, color: C(l.c), lineCap: l.cap ? LineCapStyle.Projecting : LineCapStyle.Butt });
+      }
+      for (const w of palavras) {
+        const meio = w.y + w.h / 2;
+        if (meio < y0 || meio >= y1) continue;
+        const cl = w.clip;
+        if (w.y >= cl.y2 - 0.5 || w.y + w.h <= cl.y1 + 0.5) continue;        // escondida pelo recorte
+        const f = w.neg ? fNeg : fReg, tam = w.fs * PX;
+        let txt = w.txt;
+        if (w.dir[w.dir.length - 1] > cl.x2 + 0.5) {                           // passa da célula: corta
+          let n = w.dir.findIndex(d => d > cl.x2 + 0.5);
+          if (cl.reticencias) {
+            const lr = f.widthOfTextAtSize("…", tam) / PX;
+            while (n > 0 && w.dir[n - 1] + lr > cl.x2) n--;
+            txt = txt.slice(0, n) + "…";
+          } else txt = txt.slice(0, n);
+          if (!txt) continue;
+        }
+        if (w.x >= cl.x2 - 0.5) continue;
+        pg.drawText(textoSeguro(txt, f), { x: px(w.x), y: py(w.y + w.bl * w.fs), size: tam, font: f, color: C(w.c) });
+      }
+    }
+    pdf.setTitle(info.titulo || "Requisição");
+    if (info.autor) pdf.setAuthor(info.autor);
+    pdf.setCreator(info.criador || "Recursos Materiais");
+    pdf.setProducer("Recursos Materiais — pdf-lib");
+    pdf.setLanguage("pt-BR");
+    return await pdf.save();
+  } finally {
+    caixa.remove();
+  }
+}
+
+/* ============================================================
+   RESUMO MG — Excel cru (sem formatação) para copiar e colar:
+   DESCRIÇÃO | QUANTIDADE | UNIDADE | VALOR UNITÁRIO | VALOR TOTAL
+   MM usa a Qtde mínima (mesma regra do total do formulário).
+   ============================================================ */
+function baixarResumoMG(l) {
+  const mm = l.tipo === "MM";
+  const cab = ["DESCRIÇÃO", "QUANTIDADE", "UNIDADE", "VALOR UNITÁRIO", "VALOR TOTAL"];
+  const linhas = (l.itens || []).map(i => {
+    const q = mm ? (+i.qtdMin || 0) : (+i.qtd || 0), p = +i.preco || 0;
+    return [i.descricao || "", q, i.un || "", p, Math.round(q * p * 100) / 100];
+  });
+  const nome = "Resumo_MG_" + (l.titulo || "lista").replace(/[\\/:*?"<>|]/g, "-");
+  if (window.XLSX) {
+    const ws = XLSX.utils.aoa_to_sheet([cab, ...linhas]);
+    ws["!cols"] = [{ wch: 52 }, { wch: 12 }, { wch: 9 }, { wch: 15 }, { wch: 15 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Resumo MG");
+    XLSX.writeFile(wb, nome + ".xlsx");
+  } else {                                            // reserva: CSV que o Excel abre direto
+    const f = (v) => typeof v === "number" ? String(v).replace(".", ",") : `"${String(v).replace(/"/g, '""')}"`;
+    const csv = "﻿" + [cab, ...linhas].map(r => r.map(f).join(";")).join("\r\n");
+    baixarBlob(new Blob([csv], { type: "text/csv;charset=utf-8" }), nome + ".csv");
+  }
 }
 
 /* ============================================================
