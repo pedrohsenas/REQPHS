@@ -1,0 +1,14 @@
+{
+  "name": "Projetos UIS 3",
+  "short_name": "Projetos",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f3f5",
+  "theme_color": "#e51a41",
+  "lang": "pt-BR",
+  "icons": [
+    { "src": "../logo.png", "sizes": "182x158", "type": "image/png" },
+    { "src": "../favicon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}
