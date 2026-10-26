@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#e51a41">
+<title>Projetos UIS 3</title>
+<link rel="icon" type="image/svg+xml" href="../favicon.svg">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="../logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="projetos.css">
+<!-- mesmo banco e mesmo login das Requisições -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="../config.js"></script>
+</head>
+<body>
+
+<div id="tela-login" hidden>
+  <form class="login-caixa" id="form-login">
+    <img src="../logo.png" alt="Lar" class="login-logo">
+    <strong>Projetos e RDO</strong>
+    <span class="sub">Mesmo login das Requisições</span>
+    <input type="email" id="email" placeholder="E-mail" autocomplete="username" required>
+    <input type="password" id="senha" placeholder="Senha" autocomplete="current-password" required>
+    <p class="login-erro" id="login-erro"></p>
+    <button class="btn" type="submit">Entrar</button>
+  </form>
+</div>
+
+<header id="topo">
+  <a class="marca" href="#/">
+    <img src="../favicon.svg" alt="">
+    <strong>Projetos</strong>
+    <span id="chip-unidade" class="chip-un"></span>
+  </a>
+  <nav id="nav">
+    <a href="#/" data-rota="painel">Painel</a>
+    <a href="#/demandas" data-rota="demandas">Demandas</a>
+    <a href="#/projetos" data-rota="projetos">Projetos</a>
+    <a href="#/rdos" data-rota="rdos">RDO</a>
+    <a href="#/ia" data-rota="ia">IA</a>
+  </nav>
+  <div class="topo-dir">
+    <span id="sync" class="sync" title="Situação da gravação">●</span>
+    <a class="lnk-req" href="../" title="Abrir Requisições de Material">Requisições ↗</a>
+    <button id="btn-sair" class="btn-icone" title="Sair" hidden>⎋</button>
+  </div>
+</header>
+
+<main id="app"><div class="carregando">Carregando…</div></main>
+
+<!-- barra inferior (celular) -->
+<nav id="tabbar">
+  <a href="#/" data-rota="painel"><span>◧</span>Painel</a>
+  <a href="#/demandas" data-rota="demandas"><span>☑</span>Demandas</a>
+  <button id="fab" title="Lançamento rápido">＋</button>
+  <a href="#/projetos" data-rota="projetos"><span>▤</span>Projetos</a>
+  <a href="#/rdos" data-rota="rdos"><span>▣</span>RDO</a>
+</nav>
+
+<div id="folha" class="folha" hidden></div>
+<div id="toast" class="toast" hidden></div>
+
+<script src="rdo-pdf.js"></script>
+<script src="projetos.js"></script>
+</body>
+</html>

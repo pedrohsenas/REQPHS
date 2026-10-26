@@ -26,3 +26,7 @@ No menu superior, **Histórico por item** lista todos os itens já lançados nas
 - **🖨️ Imprimir** continua abrindo a impressão do navegador.
 - **📊 Resumo MG** baixa um Excel sem formatação para copiar e colar: CÓDIGO, DESCRIÇÃO, quatro colunas em branco (C a F, para preencher no destino), QUANTIDADE, UNIDADE, VALOR UNITÁRIO, VALOR TOTAL. No MM, a quantidade usada é a Qtde mínima.
 - **▲ ▼ ✕** ao lado de cada item sobem, descem ou removem o item. Não aparecem na impressão nem no PDF, e a mudança de ordem fica no histórico de edições.
+
+## Projetos, demandas e RDO
+
+Módulo em [`projetos/`](projetos/README.md), no endereço `…/REQPHS/projetos/`. Usa o mesmo banco e o mesmo login. Antes de usar, rode `projetos/supabase_projetos.sql` uma vez.
