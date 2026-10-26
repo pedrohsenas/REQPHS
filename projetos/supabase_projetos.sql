@@ -110,8 +110,8 @@ select
   l.dados->>'projetoId'                                       as projeto_id,
   count(distinct l.id)                                        as listas,
   coalesce(sum(
-    coalesce(nullif(i->>'qtd','')::numeric, 0) *
-    coalesce(nullif(i->>'preco','')::numeric, 0)), 0)         as valor_material
+    case when jsonb_typeof(i->'qtd')   = 'number' then (i->>'qtd')::numeric   else 0 end *
+    case when jsonb_typeof(i->'preco') = 'number' then (i->>'preco')::numeric else 0 end), 0) as valor_material
 from public.req_listas l
 cross join lateral jsonb_array_elements(coalesce(l.dados->'itens','[]'::jsonb)) i
 where coalesce(l.dados->>'tipo','RM') = 'RM'
@@ -123,7 +123,7 @@ create or replace view public.v_prj_resumo
 with (security_invoker = on) as
 with ativ as (
   select f.projeto_id,
-         round(avg(coalesce(nullif(a->>'pct','')::numeric,0)),1) as avanco_pct
+         round(avg(case when jsonb_typeof(a->'pct') = 'number' then (a->>'pct')::numeric else 0 end),1) as avanco_pct
   from public.prj_fichas f
   cross join lateral jsonb_array_elements(coalesce(f.dados->'atividades','[]'::jsonb)) a
   group by 1
