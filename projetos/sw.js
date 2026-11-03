@@ -1,6 +1,6 @@
 /* Service worker mínimo: abre o app sem sinal (rede primeiro, cache como reserva).
    Não intercepta Supabase nem CDNs de terceiros além das bibliotecas do PDF. */
-const CACHE = "pj-v1";
+const CACHE = "pj-v2";
 const BASE = ["./", "index.html", "projetos.css", "projetos.js", "rdo-pdf.js", "manifest.webmanifest",
   "../config.js", "../logo.png", "../favicon.svg"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(BASE)).catch(() => {})); self.skipWaiting(); });

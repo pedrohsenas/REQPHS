@@ -201,19 +201,28 @@
     }
 
     /* ---------- mão de obra e equipamentos ---------- */
+    /* só os itens incluídos no RDO; até 6 por linha (mais que isso quebra em outra linha) */
     function contagem(titulo, lista, rotTotal) {
       barra(titulo);
-      const itens = (lista && lista.length ? lista : [{ nome: "-", n: 0 }]);
-      const larg = 620 / itens.length;
+      const itens = (lista || []).filter(m => m && String(m.nome || "").trim());
       const total = itens.reduce((s, m) => s + (+m.n || 0), 0);
-      const hc = 13;
-      itens.forEach((m, i) => {
-        celula(i * larg, (i + 1) * larg, y, hc, m.nome, { bold: true, size: 7 });
-        celula(i * larg, (i + 1) * larg, y + hc, hc, String(+m.n || 0));
+      const hc = 13, POR_LINHA = 6;
+      const linhas = [];
+      for (let i = 0; i < Math.max(1, itens.length); i += POR_LINHA) linhas.push(itens.slice(i, i + POR_LINHA));
+      const y0 = y;
+      linhas.forEach((ln, k) => {
+        if (!ln.length) { celula(0, 620, y, 2 * hc, "Nenhum registrado no dia", { size: 7, cor: rgb(0.4, 0.4, 0.4) }); y += 2 * hc; return; }
+        const larg = 620 / (linhas.length > 1 ? POR_LINHA : ln.length);
+        ln.forEach((m, i) => {
+          celula(i * larg, (i + 1) * larg, y, hc, m.nome, { bold: true, size: 7 });
+          celula(i * larg, (i + 1) * larg, y + hc, hc, String(+m.n || 0));
+        });
+        if (ln.length * larg < 620) celula(ln.length * larg, 620, y, 2 * hc, "");
+        y += 2 * hc;
       });
-      celula(620, 780, y, hc, rotTotal, { fill: CLARO, bold: true, size: 7 });
-      celula(620, 780, y + hc, hc, String(total), { fill: CLARO, bold: true });
-      y += 2 * hc;
+      const hTot = y - y0;
+      celula(620, 780, y0, hc, rotTotal, { fill: CLARO, bold: true, size: 7 });
+      celula(620, 780, y0 + hc, hTot - hc, String(total), { fill: CLARO, bold: true });
     }
     contagem("Mão de Obra", d.maoObra, "Total Mão de Obra Envolvida");
     contagem("Equipamentos", d.equipamentos, "Total Equipamentos Envolvidos");
