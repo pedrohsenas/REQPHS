@@ -159,11 +159,20 @@ const nomeProjeto = (id) => (projetoPorId(id) || {}).nome || "";
 function fichaDe(pid) {
   const f = S.fichas[pid] || (S.fichas[pid] = {});
   f.atividades ||= []; f.marcos ||= [];
-  f.maoObra ||= [...PADRAO.maoObra]; f.equipamentos ||= [...PADRAO.equipamentos];
+  /* mão de obra / equipamentos: os padrões valem para todos; os criados ficam só neste projeto */
+  for (const tipo of ["maoObra", "equipamentos"]) {
+    const extra = tipo + "Extra";
+    if (Array.isArray(f[tipo])) {             // formato antigo: lista completa → guarda só os que não são padrão
+      f[extra] = [...new Set([...(f[extra] || []), ...f[tipo].filter(n => !PADRAO[tipo].includes(n))])];
+      delete f[tipo];
+    }
+    f[extra] ||= [];
+  }
   f.setor ??= PADRAO.setor; f.responsavel ??= PADRAO.responsavel; f.local ??= UNI().local;
   f.fase ||= "execucao";
   return f;
 }
+const opcoesRecurso = (f, tipo) => [...PADRAO[tipo], ...f[tipo + "Extra"].filter(n => !PADRAO[tipo].includes(n))];
 const salvarFicha = (pid) => gravar("prj_fichas", { projeto_id: String(pid), unidade: UN, dados: fichaDe(pid), atualizado_em: new Date().toISOString() });
 const rdosDe = (pid) => S.rdos.filter(r => String(r.projeto_id) === String(pid)).sort((a, b) => (b.numero || 0) - (a.numero || 0) || String(b.data).localeCompare(a.data));
 const ultimaAtividade = (p) => { const r = rdosDe(p.id)[0]; return r ? r.data : ""; };
@@ -432,24 +441,25 @@ function telaDemandas() {
 /* ============================================================
    FOLHAS (bottom sheet)
    ============================================================ */
-function abrirFolha(html, ao) {
+/* só fecha pelo X (tocar fora não fecha, para não perder o que foi digitado) */
+function abrirFolha(titulo, html, ao) {
   const f = $("#folha");
-  f.innerHTML = `<div class="caixa">${html}</div>`; f.hidden = false;
-  f.onclick = (e) => { if (e.target === f) fecharFolha(); };
+  f.innerHTML = `<div class="caixa" role="dialog" aria-modal="true">
+    <div class="folha-topo"><h2>${titulo}</h2><button type="button" class="fechar" data-fechar aria-label="Fechar" title="Fechar">✕</button></div>
+    <div class="folha-corpo">${html}</div></div>`;
+  f.hidden = false; document.body.classList.add("com-folha");
   $$("[data-fechar]", f).forEach(b => b.onclick = fecharFolha);
   ao && ao(f);
   const foco = $("[autofocus]", f); if (foco) setTimeout(() => foco.focus(), 60);
 }
-function fecharFolha() { const f = $("#folha"); f.hidden = true; f.innerHTML = ""; }
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") fecharFolha(); });
+function fecharFolha() { const f = $("#folha"); f.hidden = true; f.innerHTML = ""; document.body.classList.remove("com-folha"); }
 const opcoes = (lista, sel) => lista.map(([v, t]) => `<option value="${esc(v)}" ${String(sel ?? "") === String(v) ? "selected" : ""}>${esc(t)}</option>`).join("");
 const opcoesProjetos = (sel) => `<option value="">— sem projeto —</option>` + opcoes(projetosAtivos().map(p => [p.id, p.nome]), sel);
 
 function folhaDemanda(d, extra = {}) {
   const nova = !d;
   d = d || { prioridade: prioNova, status: "aberta", ...extra };
-  abrirFolha(`
-    <h2>${nova ? "Nova demanda" : "Demanda"}</h2>
+  abrirFolha(`${nova ? "Nova demanda" : "Demanda"}`, `
     <form class="pilha" id="f-dem">
       <label class="campo">Título<input type="text" name="titulo" value="${esc(d.titulo)}" required ${nova ? "autofocus" : ""}></label>
       <div class="grade2">
@@ -462,9 +472,9 @@ function folhaDemanda(d, extra = {}) {
       </div>
       <label class="campo">Projeto<select name="projeto_id">${opcoesProjetos(d.projeto_id)}</select></label>
       <label class="campo">Detalhes<textarea name="detalhe" placeholder="opcional">${esc(d.detalhe)}</textarea></label>
-      <div class="rodape">${nova ? "" : `<button type="button" class="btn sec" id="d-del">Excluir</button>`}
-        <button type="button" class="btn sec" data-fechar>Cancelar</button><button class="btn" type="submit">Salvar</button></div>
       ${!nova && d.criado_em ? `<div class="meta" style="font-size:12px;color:var(--cinza)">Criada em ${dataBR(String(d.criado_em).slice(0, 10))}</div>` : ""}
+      <div class="rodape">${nova ? "" : `<button type="button" class="btn sec" id="d-del">Excluir</button>`}
+        <button class="btn" type="submit">Salvar</button></div>
     </form>`, (f) => {
     $("#f-dem", f).onsubmit = (e) => {
       e.preventDefault();
@@ -485,7 +495,7 @@ function folhaDemanda(d, extra = {}) {
   });
 }
 function folhaRapida() {
-  abrirFolha(`<h2>Lançar</h2>
+  abrirFolha(`Lançar`, `
     <div class="opcoes-rapidas">
       <button data-op="dem"><span>☑</span><div>Demanda<small>algo para fazer, do dia a dia</small></div></button>
       <button data-op="rdo"><span>▣</span><div>RDO de hoje<small>fotos, efetivo e avanço da obra</small></div></button>
@@ -507,7 +517,7 @@ function escolherProjeto(titulo, ao) {
   const ps = projetosAtivos();
   if (!ps.length) { toast("Crie um projeto primeiro."); folhaProjeto(null); return; }
   if (ps.length === 1) { ao(ps[0].id); return; }
-  abrirFolha(`<h2>${esc(titulo)}</h2><div class="opcoes-rapidas">
+  abrirFolha(`${esc(titulo)}`, `<div class="opcoes-rapidas">
     ${ps.map(p => `<button data-pid="${esc(p.id)}"><span>▤</span><div>${esc(p.nome)}<small>${esc(fichaDe(p.id).codigo || "")}</small></div></button>`).join("")}</div>`,
     (f) => $$("[data-pid]", f).forEach(b => b.onclick = () => ao(b.dataset.pid)));
 }
@@ -532,8 +542,7 @@ function telaProjetos() {
 function folhaProjeto(p) {
   const novo = !p;
   const f = novo ? { fase: "execucao", inicio: hojeISO() } : fichaDe(p.id);
-  abrirFolha(`
-    <h2>${novo ? "Novo projeto" : "Dados do projeto"}</h2>
+  abrirFolha(`${novo ? "Novo projeto" : "Dados do projeto"}`, `
     <form class="pilha" id="f-proj">
       <label class="campo">Nome<input type="text" name="nome" value="${esc(p && p.nome)}" required ${novo ? "autofocus" : ""} placeholder="Ex.: Reforma do mezanino"></label>
       <div class="grade2">
@@ -551,10 +560,10 @@ function folhaProjeto(p) {
         <label class="campo">Setor<input type="text" name="setor" value="${esc(f.setor)}"></label>
         <label class="campo">Responsável<input type="text" name="responsavel" value="${esc(f.responsavel)}"></label>
       </div>
-      <label class="campo">Mão de obra no RDO (separe por vírgula)<input type="text" name="maoObra" value="${esc(f.maoObra.join(", "))}"></label>
-      <label class="campo">Equipamentos no RDO (separe por vírgula)<input type="text" name="equipamentos" value="${esc(f.equipamentos.join(", "))}"></label>`}
+      <label class="campo">Mão de obra própria deste projeto <small>(além das padrão; separe por vírgula)</small><input type="text" name="maoObraExtra" value="${esc(f.maoObraExtra.join(", "))}" placeholder="Ex.: Soldador, Montador de andaime"></label>
+      <label class="campo">Equipamentos próprios deste projeto <small>(além dos padrão; separe por vírgula)</small><input type="text" name="equipamentosExtra" value="${esc(f.equipamentosExtra.join(", "))}" placeholder="Ex.: Caminhão pipa"></label>`}
       <div class="rodape">${novo ? "" : `<button type="button" class="btn sec" id="p-arq">${p.status === "arquivado" ? "Reativar" : "Arquivar"}</button>`}
-        <button type="button" class="btn sec" data-fechar>Cancelar</button><button class="btn" type="submit">Salvar</button></div>
+        <button class="btn" type="submit">Salvar</button></div>
     </form>`, (el) => {
     $("#f-proj", el).onsubmit = async (e) => {
       e.preventDefault();
@@ -569,8 +578,8 @@ function folhaProjeto(p) {
       Object.assign(fi, { codigo: v.codigo.trim(), fase: v.fase, inicio: v.inicio, prazoDias: +v.prazoDias || "", orcamento: num(v.orcamento) || "", descricao: v.descricao.trim() });
       if (!novo) {
         fi.setor = v.setor.trim(); fi.responsavel = v.responsavel.trim();
-        fi.maoObra = v.maoObra.split(",").map(s => s.trim()).filter(Boolean);
-        fi.equipamentos = v.equipamentos.split(",").map(s => s.trim()).filter(Boolean);
+        fi.maoObraExtra = [...new Set(v.maoObraExtra.split(",").map(s => s.trim()).filter(Boolean))];
+        fi.equipamentosExtra = [...new Set(v.equipamentosExtra.split(",").map(s => s.trim()).filter(Boolean))];
       }
       salvarFicha(proj.id); fecharFolha();
       if (novo) location.hash = "#/p/" + encodeURIComponent(proj.id); else render();
@@ -633,7 +642,7 @@ function abaResumo(alvo, p, ind) {
       ${f.marcos.map(m => `<div class="ativ marco">
         <input type="text" value="${esc(m.nome)}" data-m="${m.id}" data-k="nome" placeholder="Marco">
         <input type="date" value="${esc(m.prev || "")}" data-m="${m.id}" data-k="prev" title="Data prevista">
-        <button class="rm" data-mrm="${m.id}" title="Remover">×</button>
+        <button class="rm" data-mrm="${m.id}" title="Remover" aria-label="Remover">✕</button>
         <label class="check" style="grid-column:1/-1; display:flex; gap:8px; font-size:13px; color:var(--cinza); margin-top:-2px">
           <input type="checkbox" data-mok="${m.id}" ${m.real ? "checked" : ""}> concluído ${m.real ? "em " + dataBR(m.real) : ""}
           ${!m.real && m.prev && m.prev < hojeISO() ? `<span class="tag atraso">vencido</span>` : ""}</label>
@@ -647,17 +656,29 @@ function abaResumo(alvo, p, ind) {
 
 /* editor de atividades com % — usado na ficha e no RDO */
 function htmlAtividades(ativs) {
+  const n = ativs.length;
   return ativs.map((a, i) => `<div class="ativ" data-ai="${i}">
-    <input type="text" value="${esc(a.nome)}" data-an="${i}" placeholder="Atividade">
-    <button class="rm" data-arm="${i}" title="Remover">×</button>
+    <span class="ord">${i + 1}</span>
+    <textarea rows="1" data-an="${i}" placeholder="Atividade">${esc(a.nome)}</textarea>
+    <div class="mover">
+      <button type="button" data-asu="${i}" title="Subir" aria-label="Subir" ${i ? "" : "disabled"}>▲</button>
+      <button type="button" data-ade="${i}" title="Descer" aria-label="Descer" ${i < n - 1 ? "" : "disabled"}>▼</button>
+      <button type="button" class="rm" data-arm="${i}" title="Remover" aria-label="Remover">✕</button>
+    </div>
     <div class="ativ-pct">
       <div class="pct"><input type="number" inputmode="numeric" min="0" max="100" value="${+a.pct || 0}" data-ap="${i}"><span>%</span></div>
       <div class="pct-rapido">${[0, 25, 50, 75, 100].map(v => `<button type="button" data-aq="${i}" data-v="${v}" class="${(+a.pct || 0) === v ? "on" : ""}">${v}</button>`).join("")}</div>
     </div>
   </div>`).join("");
 }
+/* textarea que cresce com o texto (nomes longos aparecem inteiros no celular) */
+const autoAltura = (t) => { t.style.height = "auto"; t.style.height = t.scrollHeight + 2 + "px"; };
 function ligarAtividades(raiz, ativs, aoMudar, redesenhar) {
-  $$("[data-an]", raiz).forEach(i => i.oninput = () => { ativs[+i.dataset.an].nome = i.value; aoMudar(); });
+  $$("[data-an]", raiz).forEach(t => {
+    autoAltura(t);
+    t.oninput = () => { ativs[+t.dataset.an].nome = t.value.replace(/\n+/g, " "); autoAltura(t); aoMudar(); };
+    t.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); t.blur(); } };
+  });
   $$("[data-ap]", raiz).forEach(i => i.oninput = () => {
     ativs[+i.dataset.ap].pct = clamp(num(i.value), 0, 100); aoMudar();
     $$(`[data-aq="${i.dataset.ap}"]`, raiz).forEach(b => b.classList.toggle("on", +b.dataset.v === ativs[+i.dataset.ap].pct));
@@ -667,23 +688,33 @@ function ligarAtividades(raiz, ativs, aoMudar, redesenhar) {
     $(`[data-ap="${k}"]`, raiz).value = ativs[k].pct;
     $$(`[data-aq="${k}"]`, raiz).forEach(x => x.classList.toggle("on", x === b));
   });
+  const mover = (de, para) => {
+    if (para < 0 || para >= ativs.length) return;
+    const [a] = ativs.splice(de, 1); ativs.splice(para, 0, a);
+    aoMudar(); redesenhar();
+    const alvo = $(`[data-ai="${para}"]`, raiz);
+    if (alvo) { alvo.classList.add("movida"); alvo.scrollIntoView({ block: "nearest", behavior: "smooth" }); setTimeout(() => alvo.classList.remove("movida"), 700); }
+  };
+  $$("[data-asu]", raiz).forEach(b => b.onclick = () => mover(+b.dataset.asu, +b.dataset.asu - 1));
+  $$("[data-ade]", raiz).forEach(b => b.onclick = () => mover(+b.dataset.ade, +b.dataset.ade + 1));
   $$("[data-arm]", raiz).forEach(b => b.onclick = () => {
-    const a = ativs[+b.dataset.arm];
+    const k = +b.dataset.arm, a = ativs[k];
     if (a.nome && !confirm(`Remover "${a.nome}"?`)) return;
-    ativs.splice(+b.dataset.arm, 1); aoMudar(); redesenhar();
+    ativs.splice(k, 1);
+    aoMudar(); redesenhar();
   });
 }
 function abaAtividades(alvo, p, ind) {
   const f = ind.f;
   const desenhar = () => {
     alvo.innerHTML = `<div class="cartao">
-      <div class="meta" style="margin-bottom:6px">Estas atividades e percentuais aparecem no RDO. Ao preencher o RDO, os % daqui são atualizados.</div>
+      <div class="meta" style="margin-bottom:6px">Estas atividades aparecem no RDO nesta mesma ordem. Use ▲ ▼ para agrupar as etapas. O RDO mais recente atualiza os % daqui.</div>
       <div id="ativs">${htmlAtividades(f.atividades) || `<div class="meta" style="padding:10px 0">Nenhuma atividade ainda.</div>`}</div>
       <div class="linha-acoes" style="margin-top:12px"><button class="btn sec mini" id="a-add">+ atividade</button>
         <span class="meta">Avanço geral: <b>${ind.avanco == null ? "—" : fmt1.format(avancoDe(f.atividades)) + "%"}</b></span></div></div>`;
     const salvar = debounce(() => salvarFicha(p.id), 700);
     ligarAtividades(alvo, f.atividades, salvar, () => { salvarFicha(p.id); desenhar(); });
-    $("#a-add").onclick = () => { f.atividades.push({ id: uid(), nome: "", pct: 0 }); desenhar(); const i = $$("#ativs input[type=text]").pop(); i && i.focus(); };
+    $("#a-add").onclick = () => { f.atividades.push({ id: uid(), nome: "", pct: 0 }); salvarFicha(p.id); desenhar(); const i = $$("#ativs textarea").pop(); if (i) { i.focus(); i.scrollIntoView({ block: "center" }); } };
   };
   desenhar();
 }
@@ -699,22 +730,22 @@ function abaCustos(alvo, p, ind) {
       <div class="kpi ${ind.custoPct > 100 ? "alerta" : ""}"><div class="rot">Saldo</div><div class="val" style="font-size:20px">${ind.orc ? dinheiroCurto(ind.orc - mat - ext) : "—"}</div><div class="det">${ind.orc ? fmt1.format(ind.custoPct) + "% consumido" : ""}</div></div>
     </div>
     <div class="secao">Requisições de material (automático)</div>
-    ${ls.length ? `<div class="rolagem"><table class="tab"><thead><tr><th>Requisição</th><th>Data</th><th>Situação</th><th class="num">Valor</th></tr></thead><tbody>
-      ${ls.map(l => `<tr><td><a href="../?u=${UN.toLowerCase()}#/lista/${esc(l.id)}" target="_blank" rel="noopener">${esc(l.titulo)}</a></td><td>${dataCurta(l.data || l.criadoEm)}</td>
-        <td>${l.status === "concluida" ? `<span class="tag ok">concluída</span>` : `<span class="tag">em andamento</span>`}</td><td class="num">${dinheiro(totalLista(l))}</td></tr>`).join("")}
-    </tbody></table></div>` : `<div class="vazio">Nenhuma RM vinculada a este projeto nas Requisições.</div>`}
+    ${ls.length ? `<div class="lista">${ls.map(l => `<a class="item linha-valor" href="../?u=${UN.toLowerCase()}#/lista/${esc(l.id)}" target="_blank" rel="noopener">
+        <div class="corpo"><div class="txt">${esc(l.titulo)}</div><div class="meta"><span>${dataCurta(l.data || l.criadoEm)}</span>
+          ${l.status === "concluida" ? `<span class="tag ok">concluída</span>` : `<span class="tag">em andamento</span>`}</div></div>
+        <b class="num">${dinheiro(totalLista(l))}</b></a>`).join("")}</div>` : `<div class="vazio">Nenhuma RM vinculada a este projeto nas Requisições.</div>`}
     <div class="secao">Serviços e extras<button class="acao btn sec mini" id="c-add">+ custo</button></div>
-    ${ex.length ? `<div class="rolagem"><table class="tab"><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th class="num">Valor</th></tr></thead><tbody>
-      ${ex.map(c => `<tr data-custo="${esc(c.id)}" style="cursor:pointer"><td>${dataCurta(c.data)}</td><td>${esc(c.descricao)}${c.fornecedor ? `<div class="meta">${esc(c.fornecedor)}</div>` : ""}</td>
-        <td>${esc((CATEG_CUSTO.find(x => x[0] === c.categoria) || [, c.categoria])[1])}</td><td class="num">${dinheiro(c.valor)}</td></tr>`).join("")}
-    </tbody></table></div>` : `<div class="vazio">Lance aqui serviços de terceiros, mão de obra e o que não passa por RM.</div>`}`;
+    ${ex.length ? `<div class="lista">${ex.map(c => `<div class="item linha-valor" data-custo="${esc(c.id)}">
+        <div class="corpo"><div class="txt">${esc(c.descricao)}</div><div class="meta"><span>${dataCurta(c.data)}</span>
+          <span class="tag">${esc((CATEG_CUSTO.find(x => x[0] === c.categoria) || [, c.categoria])[1])}</span>${c.fornecedor ? `<span>${esc(c.fornecedor)}</span>` : ""}</div></div>
+        <b class="num">${dinheiro(c.valor)}</b></div>`).join("")}</div>` : `<div class="vazio">Lance aqui serviços de terceiros, mão de obra e o que não passa por RM.</div>`}`;
   $("#c-add").onclick = () => folhaCusto(p.id);
   $$("[data-custo]").forEach(tr => tr.onclick = () => folhaCusto(p.id, S.custos.find(c => c.id === tr.dataset.custo)));
 }
 function folhaCusto(pid, c) {
   const novo = !c;
   c = c || { data: hojeISO(), categoria: "servico" };
-  abrirFolha(`<h2>${novo ? "Novo custo" : "Custo"} · ${esc(nomeProjeto(pid))}</h2>
+  abrirFolha(`${novo ? "Novo custo" : "Custo"} · ${esc(nomeProjeto(pid))}`, `
     <form class="pilha" id="f-custo">
       <label class="campo">Descrição<input type="text" name="descricao" value="${esc(c.descricao)}" required ${novo ? "autofocus" : ""} placeholder="Ex.: Mão de obra elétrica — medição 1"></label>
       <div class="grade2">
@@ -726,7 +757,7 @@ function folhaCusto(pid, c) {
         <label class="campo">Fornecedor<input type="text" name="fornecedor" value="${esc(c.fornecedor)}" placeholder="opcional"></label>
       </div>
       <div class="rodape">${novo ? "" : `<button type="button" class="btn sec" id="c-del">Excluir</button>`}
-        <button type="button" class="btn sec" data-fechar>Cancelar</button><button class="btn" type="submit">Salvar</button></div>
+        <button class="btn" type="submit">Salvar</button></div>
     </form>`, (el) => {
     $("#f-custo", el).onsubmit = (e) => {
       e.preventDefault();
@@ -789,15 +820,16 @@ function criarRdo(pid) {
   const jaHoje = anteriores.find(r => r.data === hoje);
   if (jaHoje && !confirm(`Já existe o RDO nº ${jaHoje.numero} de hoje para esta obra. Criar outro mesmo assim?`)) { location.hash = "#/rdo/" + encodeURIComponent(jaHoje.id); return; }
   const u = ult ? ult.dados : {};
-  const contagem = (rotulos, antes) => rotulos.map(nome => ({ nome, n: +((antes || []).find(x => x.nome === nome) || {}).n || 0 }));
+  const herdar = (antes) => (antes || []).filter(m => m && m.nome).map(m => ({ nome: m.nome, n: +m.n || 0 }));
   const r = {
     id: uid(), projeto_id: pid, unidade: UN,
     numero: (anteriores.reduce((m, x) => Math.max(m, +x.numero || 0), 0)) + 1,
     data: hoje, autor: emailSessao, criado_em: new Date().toISOString(), atualizado_em: new Date().toISOString(),
     dados: {
       clima: u.clima ? JSON.parse(JSON.stringify(u.clima)) : { manha: { tempo: "Limpo", condicao: "Praticável" }, tarde: { tempo: "Limpo", condicao: "Praticável" } },
-      maoObra: contagem(f.maoObra, u.maoObra),
-      equipamentos: contagem(f.equipamentos, u.equipamentos),
+      maoObra: herdar(u.maoObra),            // só o que foi incluído no relatório anterior
+      equipamentos: herdar(u.equipamentos),
+      v2: true,
       atividades: f.atividades.map(a => ({ ...a })),
       ocorrencias: "",
       fotos: [],
@@ -815,21 +847,40 @@ function telaRdo(idCod) {
   const f = fichaDe(r.projeto_id);
   const d = r.dados;
   d.clima ||= { manha: {}, tarde: {} }; d.maoObra ||= []; d.equipamentos ||= []; d.atividades ||= []; d.fotos ||= [];
+  if (!d.v2) {                 // RDO do formato antigo: trazia todas as categorias, até as zeradas
+    d.maoObra = d.maoObra.filter(m => +m.n); d.equipamentos = d.equipamentos.filter(m => +m.n); d.v2 = true;
+  }
+  d.atividades.forEach(a => { a.id ||= uid(); });
   const ehUltimo = rdosDe(r.projeto_id)[0] === r;
+  /* o RDO mais recente espelha a lista atual do projeto (ordem, inclusões e exclusões feitas na aba Atividades) */
+  if (ehUltimo && f.atividades.length) d.atividades = f.atividades.map(a => ({ id: a.id || uid(), nome: a.nome, pct: +a.pct || 0 }));
   const pr = prazoRdo(r, f);
 
   const salvar = debounce(() => {
     r.atualizado_em = new Date().toISOString();
     gravar("prj_rdos", r);
-    if (ehUltimo) {          // o RDO mais recente atualiza o % das atividades do projeto
-      f.atividades = d.atividades.map(a => ({ id: a.id || uid(), nome: a.nome, pct: +a.pct || 0 }));
+    if (ehUltimo) {          // o RDO mais recente atualiza nome, % e ordem das atividades do projeto
+      f.atividades = d.atividades.map(a => ({ id: a.id, nome: a.nome, pct: +a.pct || 0 }));
       salvarFicha(r.projeto_id);
     }
   }, 900);
 
-  const contadores = (lista, chave) => lista.map((m, i) => `<div class="contador ${+m.n ? "" : "zero"}">
-      <span title="${esc(m.nome)}">${esc(m.nome)}</span>
-      <div class="ctl"><button type="button" data-${chave}="${i}" data-d="-1">−</button><b>${+m.n || 0}</b><button type="button" data-${chave}="${i}" data-d="1">+</button></div></div>`).join("");
+  /* mão de obra / equipamentos: só entra no RDO (e no PDF) o que for incluído aqui */
+  const RECURSOS = { mo: { tipo: "maoObra", lista: () => d.maoObra, novo: "Outro profissional…", vazio: "Toque em um profissional abaixo para incluir no RDO." },
+                     eq: { tipo: "equipamentos", lista: () => d.equipamentos, novo: "Outro equipamento…", vazio: "Nenhum equipamento no RDO. Toque abaixo para incluir." } };
+  const htmlRecurso = (ch) => {
+    const R = RECURSOS[ch], lista = R.lista();
+    const dentro = new Set(lista.map(m => norm(m.nome)));
+    const fora = opcoesRecurso(f, R.tipo).filter(n => !dentro.has(norm(n)));
+    const proprios = new Set(f[R.tipo + "Extra"].map(norm));
+    return `${lista.length ? `<div class="contadores">${lista.map((m, i) => `<div class="contador">
+        <button type="button" class="tirar" data-rm-${ch}="${i}" aria-label="Tirar do RDO" title="Tirar do RDO">✕</button>
+        <span title="${esc(m.nome)}">${esc(m.nome)}</span>
+        <div class="ctl"><button type="button" data-${ch}="${i}" data-d="-1" aria-label="Menos">−</button><b>${+m.n || 0}</b><button type="button" data-${ch}="${i}" data-d="1" aria-label="Mais">+</button></div></div>`).join("")}</div>`
+      : `<div class="meta">${R.vazio}</div>`}
+      ${fora.length ? `<div class="chips">${fora.map(n => `<button type="button" class="chip ${proprios.has(norm(n)) ? "proprio" : ""}" data-inc-${ch}="${esc(n)}">+ ${esc(n)}</button>`).join("")}</div>` : ""}
+      <form class="novo-rec" data-novo="${ch}" autocomplete="off"><input type="text" placeholder="${R.novo}" enterkeyhint="done"><button class="btn sec mini" type="submit">Criar</button></form>`;
+  };
   const climaSel = (per) => `<span class="per">${per === "manha" ? "Manhã" : "Tarde"}</span>
       <select data-clima="${per}" data-k="tempo">${opcoes(TEMPOS.map(t => [t, t]), d.clima[per]?.tempo)}</select>
       <select data-clima="${per}" data-k="condicao">${opcoes(CONDICOES.map(t => [t, t]), d.clima[per]?.condicao)}</select>`;
@@ -854,8 +905,8 @@ function telaRdo(idCod) {
 
     <div class="bloco"><h2>Condição climática</h2><div class="clima">${climaSel("manha")}${climaSel("tarde")}</div></div>
 
-    <div class="bloco"><h2>Mão de obra<span class="esp"></span><span class="meta" id="tot-mo"></span></h2><div class="contadores" id="mo">${contadores(d.maoObra, "mo")}</div></div>
-    <div class="bloco"><h2>Equipamentos<span class="esp"></span><span class="meta" id="tot-eq"></span></h2><div class="contadores" id="eq">${contadores(d.equipamentos, "eq")}</div></div>
+    <div class="bloco"><h2>Mão de obra<span class="esp"></span><span class="meta" id="tot-mo"></span></h2><div id="rec-mo">${htmlRecurso("mo")}</div></div>
+    <div class="bloco"><h2>Equipamentos<span class="esp"></span><span class="meta" id="tot-eq"></span></h2><div id="rec-eq">${htmlRecurso("eq")}</div></div>
 
     <div class="bloco"><h2>Atividades<span class="esp"></span><span class="meta" id="tot-av"></span></h2>
       <div id="rdo-ativs">${htmlAtividades(d.atividades)}</div>
@@ -898,17 +949,32 @@ function telaRdo(idCod) {
   $("#rdo-num").oninput = (e) => { r.numero = +e.target.value || r.numero; salvar(); };
   const lp = $("#rdo-prazo"); if (lp) lp.onclick = (e) => { e.preventDefault(); folhaProjeto(p); };
   $$("[data-clima]").forEach(s => s.onchange = () => { (d.clima[s.dataset.clima] ||= {})[s.dataset.k] = s.value; salvar(); });
-  for (const [chave, lista] of [["mo", d.maoObra], ["eq", d.equipamentos]]) {
-    $$(`[data-${chave}]`).forEach(b => b.onclick = () => {
-      const m = lista[+b.dataset[chave]]; m.n = Math.max(0, (+m.n || 0) + (+b.dataset.d));
+  const ligarRecurso = (ch) => {
+    const R = RECURSOS[ch], caixa = $("#rec-" + ch), lista = R.lista();
+    const redesenhar = () => { caixa.innerHTML = htmlRecurso(ch); ligarRecurso(ch); totais(); salvar(); };
+    $$(`[data-${ch}]`, caixa).forEach(b => b.onclick = () => {
+      const m = lista[+b.dataset[ch]]; m.n = Math.max(0, (+m.n || 0) + (+b.dataset.d));
       b.parentElement.querySelector("b").textContent = m.n;
-      b.closest(".contador").classList.toggle("zero", !m.n);
       totais(); salvar();
     });
-  }
+    $$(`[data-rm-${ch}]`, caixa).forEach(b => b.onclick = () => { lista.splice(+b.dataset["rm" + (ch === "mo" ? "Mo" : "Eq")], 1); redesenhar(); });
+    $$(`[data-inc-${ch}]`, caixa).forEach(b => b.onclick = () => { lista.push({ nome: b.dataset["inc" + (ch === "mo" ? "Mo" : "Eq")], n: 1 }); redesenhar(); });
+    $("form[data-novo]", caixa).onsubmit = (e) => {
+      e.preventDefault();
+      const nome = e.target.querySelector("input").value.trim().replace(/\s+/g, " ");
+      if (!nome) return;
+      const ja = lista.find(m => norm(m.nome) === norm(nome));
+      if (ja) { ja.n = (+ja.n || 0) + 1; redesenhar(); return; }
+      const conhecido = opcoesRecurso(f, R.tipo).find(n => norm(n) === norm(nome));
+      if (!conhecido) { f[R.tipo + "Extra"].push(nome); salvarFicha(r.projeto_id); toast(`"${nome}" salvo na lista deste projeto`); }
+      lista.push({ nome: conhecido || nome, n: 1 });
+      redesenhar();
+    };
+  };
+  ligarRecurso("mo"); ligarRecurso("eq");
   const redesenharAtivs = () => { $("#rdo-ativs").innerHTML = htmlAtividades(d.atividades); ligarAtividades($("#rdo-ativs"), d.atividades, () => { totais(); salvar(); }, redesenharAtivs); totais(); };
   ligarAtividades($("#rdo-ativs"), d.atividades, () => { totais(); salvar(); }, redesenharAtivs);
-  $("#rdo-add-ativ").onclick = () => { d.atividades.push({ id: uid(), nome: "", pct: 0 }); redesenharAtivs(); const i = $$("#rdo-ativs input[type=text]").pop(); i && i.focus(); salvar(); };
+  $("#rdo-add-ativ").onclick = () => { d.atividades.push({ id: uid(), nome: "", pct: 0 }); redesenharAtivs(); const i = $$("#rdo-ativs textarea").pop(); if (i) { i.focus(); i.scrollIntoView({ block: "center" }); } salvar(); };
   $("#rdo-oc").oninput = (e) => { d.ocorrencias = e.target.value; salvar(); };
   const cp = $("#rdo-copiar-oc"); if (cp) cp.onclick = () => { $("#rdo-oc").value = d.ocorrencias = ultimaOcorrencia(r); salvar(); };
 
@@ -1071,13 +1137,13 @@ const PROMPTS_IA = [
 ];
 function folhaContexto() {
   const ctx = contextoIA();
-  abrirFolha(`<h2>Contexto para o Claude</h2>
-    <p class="meta" style="margin-top:-6px">Copie e cole numa conversa com o Claude (no projeto "Gestão de Projetos"). Escolha um pedido pronto ou escreva o seu.</p>
+  abrirFolha(`Contexto para o Claude`, `
+    <p class="meta" style="margin-top:0">Copie e cole numa conversa com o Claude (no projeto "Gestão de Projetos"). Escolha um pedido pronto ou escreva o seu.</p>
     <pre class="contexto" id="ctx-txt">${esc(ctx)}</pre>
     <div class="opcoes-rapidas" style="margin-top:12px">
       ${PROMPTS_IA.map(([t, pr], i) => `<button data-pr="${i}"><span>📋</span><div>${esc(t)}<small>copia contexto + pedido</small></div></button>`).join("")}
     </div>
-    <div class="rodape"><button class="btn sec" data-fechar>Fechar</button><button class="btn" id="ctx-copiar">Copiar só o contexto</button></div>`, (el) => {
+    <div class="rodape"><button class="btn" id="ctx-copiar">Copiar só o contexto</button></div>`, (el) => {
     const copiar = async (t) => {
       try { await navigator.clipboard.writeText(t); }
       catch { const ta = document.createElement("textarea"); ta.value = t; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove(); }
