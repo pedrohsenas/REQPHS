@@ -83,6 +83,9 @@
       "Andamento": { fill: rgb(0.855, 0.89, 0.953), txt: rgb(0.12, 0.22, 0.39) },
       "Parada":    { fill: rgb(1, 0, 0), txt: rgb(1, 1, 1) },
     };
+    /* destaque do avanço geral: azul (0%) → verde (100%), interpolado */
+    const AZUL = [0.122, 0.384, 0.714], VERDE = [0.106, 0.588, 0.255];      // #1F62B6 → #1B9641
+    const corAvanco = (p) => { const t = Math.max(0, Math.min(100, +p || 0)) / 100; return rgb(...AZUL.map((a, i) => a + (VERDE[i] - a) * t)); };
     const statusDe = (p) => (+p || 0) <= 0 ? "Parada" : (+p >= 100 ? "Concluído" : "Andamento");
     const pctTxt = (p) => (Math.round((+p || 0) * 10) / 10).toFixed(1).replace(".", ",");
 
@@ -256,8 +259,10 @@
     celula(620, 780, y, h, "Status", { fill: BARRA, bold: true, align: "left" });
     y += h;
     const stG = ativs.length ? statusDe(geral) : "-";
-    celula(0, 585, y, h, "Avanço geral do projeto", { bold: true, align: "left" });
-    celula(585, 620, y, h, ativs.length ? pctTxt(geral) : "-", { bold: true, size: 7 });
+    celula(0, 585, y, h, "Avanço geral do projeto", { fill: BARRA, bold: true, align: "left" });
+    celula(585, 620, y, h, ativs.length ? pctTxt(geral) : "-", ativs.length
+      ? { bold: true, size: 7, fill: corAvanco(geral), cor: rgb(1, 1, 1) }
+      : { bold: true, size: 7, fill: BARRA });
     celula(620, 780, y, h, stG, { bold: true, align: "left", fill: COR_ST[stG] && COR_ST[stG].fill, cor: COR_ST[stG] && COR_ST[stG].txt });
     y += h;
     ativs.forEach((a, i) => {
