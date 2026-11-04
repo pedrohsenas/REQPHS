@@ -80,34 +80,96 @@ let faltaTabela = false;                       // SQL ainda não rodado
 let carregou = false;
 const guardarCache = debounce(() => LS.gravar("pj.cache." + UN, S), 400);
 
-/* indicador de gravação */
-let pendentes = 0, erroGravacao = false;
-function sinal() {
-  const el = $("#sync"); if (!el) return;
-  el.className = "sync" + (pendentes ? " salvando" : erroGravacao ? " erro" : "");
-  el.title = pendentes ? "Salvando…" : erroGravacao ? "Falha ao salvar na nuvem — os dados ficaram neste aparelho" : "Tudo salvo";
+/* ============================================================
+   GRAVAÇÃO EM FILA
+   Cada alteração vai na hora para o aparelho (cache + fila no
+   localStorage) e sobe para a nuvem a cada 1 minuto com a página
+   aberta, ao tocar em "Salvar", ou ao sair/esconder a página.
+   A fila sobrevive a fechar o app: na próxima abertura ela sobe antes
+   de recarregar os dados da nuvem.
+   ============================================================ */
+const INTERVALO_SYNC = 60;                     // segundos
+const PK = { prj_fichas: "projeto_id" };
+const chaveFila = (tabela, id) => tabela + "|" + id;
+let fila = LS.ler("pj.fila." + UN, []);        // [{k, tabela, op:"up"|"del", obj?, id?, col?}]
+let sincronizando = false, erroGravacao = false, proximoSync = INTERVALO_SYNC, ultimoSalvo = null;
+const gravarFila = () => LS.gravar("pj.fila." + UN, fila);
+function enfileirar(item) {
+  fila = fila.filter(x => x.k !== item.k);     // só vale a versão mais recente de cada registro
+  fila.push(item); gravarFila(); sinal();
 }
 async function gravar(tabela, obj) {
   guardarCache();
   if (!sb) return true;
-  pendentes++; sinal();
-  try {
-    const { error } = await sb.from(tabela).upsert(obj);
-    if (error) throw error;
-    erroGravacao = false; return true;
-  } catch (e) {
-    console.warn("gravar", tabela, e.message || e);
-    erroGravacao = true;
-    if (tabelaInexistente(e)) { faltaTabela = true; render(); }
-    else toast("⚠️ Não salvou na nuvem: " + (e.message || e));
-    return false;
-  } finally { pendentes--; sinal(); }
+  const id = obj[PK[tabela] || "id"];
+  enfileirar({ k: chaveFila(tabela, id), tabela, op: "up", obj: JSON.parse(JSON.stringify(obj)) });
+  return true;
 }
 async function apagar(tabela, id, col = "id") {
   guardarCache();
   if (!sb) return;
-  const { error } = await sb.from(tabela).delete().eq(col, id);
-  if (error) toast("⚠️ Não excluiu na nuvem: " + error.message);
+  enfileirar({ k: chaveFila(tabela, id), tabela, op: "del", id, col });
+}
+async function sincronizar(manual = false) {
+  proximoSync = INTERVALO_SYNC;
+  if (!sb || sincronizando || !fila.length) { sinal(); return true; }
+  if (!navigator.onLine) { erroGravacao = true; sinal(); if (manual) toast("Sem conexão — as alterações estão guardadas no aparelho."); return false; }
+  sincronizando = true; sinal();
+  let falhou = null;
+  for (const item of fila.slice()) {
+    try {
+      const q = item.op === "del" ? sb.from(item.tabela).delete().eq(item.col, item.id) : sb.from(item.tabela).upsert(item.obj);
+      const { error } = await q;
+      if (error) throw error;
+      const atual = fila.find(x => x.k === item.k);
+      if (atual === item) fila = fila.filter(x => x !== item);   // não tira se mudou de novo durante o envio
+    } catch (e) {
+      console.warn("sincronizar", item.tabela, e.message || e);
+      falhou = e;
+      if (tabelaInexistente(e)) { faltaTabela = true; break; }
+    }
+  }
+  gravarFila();
+  sincronizando = false;
+  erroGravacao = !!falhou;
+  if (!falhou) ultimoSalvo = new Date();
+  else if (manual || !sinal._avisou) { sinal._avisou = true; toast("⚠️ Não foi possível salvar na nuvem agora. Nada se perdeu: tento de novo em 1 minuto."); }
+  if (faltaTabela) render();
+  sinal();
+  return !falhou;
+}
+/* botão do topo: "Salvar (n) · 0:42" / "Salvando…" / "✓ Salvo" */
+function sinal() {
+  const b = $("#btn-salvar"); if (!b) return;
+  const n = fila.length;
+  let estado, txt;
+  if (sincronizando) { estado = "salvando"; txt = "Salvando…"; }
+  else if (n) { estado = erroGravacao ? "erro" : "pendente"; txt = `${erroGravacao ? "⚠ " : ""}Salvar <b>${n}</b><small>${Math.floor(proximoSync / 60)}:${String(proximoSync % 60).padStart(2, "0")}</small>`; }
+  else { estado = "salvo"; txt = "✓ Salvo"; }
+  if (b.dataset.estado !== estado || b._txt !== txt) { b.innerHTML = txt; b._txt = txt; b.dataset.estado = estado; }
+  b.title = n ? `${n} alteração(ões) guardada(s) neste aparelho. Toque para enviar agora — envio automático a cada 1 minuto.`
+    : ultimoSalvo ? `Tudo salvo na nuvem (${ultimoSalvo.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })})` : "Tudo salvo na nuvem";
+}
+setInterval(() => {
+  if (!fila.length || sincronizando) return;
+  proximoSync--;
+  if (proximoSync <= 0) sincronizar(); else sinal();
+}, 1000);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden" && fila.length) sincronizar(); });
+window.addEventListener("pagehide", () => { if (fila.length) sincronizar(); });
+window.addEventListener("beforeunload", () => { if (fila.length) sincronizar(); });   // se não der tempo, sobe na próxima abertura
+window.addEventListener("online", () => { if (fila.length) sincronizar(); });
+/* depois de recarregar da nuvem, reaplica o que ainda está na fila (não perde edição local) */
+const COLECAO = { prj_rdos: "rdos", prj_demandas: "demandas", prj_custos: "custos", prj_ia: "ia", req_projetos: "projetos" };
+function reaplicarFila() {
+  for (const it of fila) {
+    if (it.tabela === "prj_fichas") { if (it.op === "up") S.fichas[it.obj.projeto_id] = it.obj.dados; else delete S.fichas[it.id]; continue; }
+    const col = COLECAO[it.tabela]; if (!col) continue;
+    const id = it.op === "up" ? it.obj.id : it.id;
+    const i = S[col].findIndex(x => String(x.id) === String(id));
+    if (it.op === "del") { if (i >= 0) S[col].splice(i, 1); }
+    else if (i >= 0) S[col][i] = it.obj; else S[col].unshift(it.obj);
+  }
 }
 const tabelaInexistente = (e) => /does not exist|could not find the table|PGRST205|42P01/i.test((e && (e.message || e.code)) || "");
 
@@ -140,7 +202,7 @@ async function carregar() {
     novo.demandas = d.filter(x => unidadeDe(x) === UN);
     novo.custos = c.filter(x => unidadeDe(x) === UN);
     novo.ia = ia.filter(x => unidadeDe(x) === UN);
-    S = novo; guardarCache.agora();
+    S = novo; reaplicarFila(); guardarCache.agora();
   } catch (e) {
     console.warn("carregar:", e.message || e);
     toast("Sem conexão com o banco — mostrando dados deste aparelho.");
@@ -1040,6 +1102,7 @@ async function exportarRdo(r, modo, botao) {
       unidade: f.local || UNI().local, setor: f.setor, responsavel: f.responsavel,
       prazo: pr.prazo || "", decorrido: pr.decorrido ?? "", vencer: pr.vencer ?? "",
       clima: r.dados.clima, maoObra: r.dados.maoObra, equipamentos: r.dados.equipamentos,
+      padraoMaoObra: PADRAO.maoObra, padraoEquipamentos: PADRAO.equipamentos,
       atividades: r.dados.atividades.filter(a => String(a.nome || "").trim()),
       ocorrencias: r.dados.ocorrencias, fotos,
     });
@@ -1173,8 +1236,10 @@ async function iniciar() {
 }
 function aposLogin() {
   $("#btn-sair").hidden = false;
-  carregar().then(reenviarPendentes);
+  sinal();
+  sincronizar().finally(() => carregar().then(reenviarPendentes));   // primeiro sobe o que ficou pendente
 }
+$("#btn-salvar").onclick = () => sincronizar(true);
 $("#btn-sair").onclick = async () => { if (sb) await sb.auth.signOut(); location.reload(); };
 $("#chip-unidade").onclick = (e) => {
   e.preventDefault();
