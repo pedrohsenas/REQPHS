@@ -74,7 +74,7 @@ const sb = (CFG.url && CFG.anonKey && window.supabase) ? window.supabase.createC
 let emailSessao = "";
 
 /* ---------------- estado ---------------- */
-const VAZIO = () => ({ projetos: [], fichas: {}, rdos: [], demandas: [], custos: [], listas: [], ia: [] });
+const VAZIO = () => ({ projetos: [], fichas: {}, rdos: [], demandas: [], custos: [], listas: [], ia: [], checkins: [] });
 let S = Object.assign(VAZIO(), LS.ler("pj.cache." + UN, {}));
 let faltaTabela = false;                       // SQL ainda não rodado
 let carregou = false;
@@ -160,7 +160,7 @@ window.addEventListener("pagehide", () => { if (fila.length) sincronizar(); });
 window.addEventListener("beforeunload", () => { if (fila.length) sincronizar(); });   // se não der tempo, sobe na próxima abertura
 window.addEventListener("online", () => { if (fila.length) sincronizar(); });
 /* depois de recarregar da nuvem, reaplica o que ainda está na fila (não perde edição local) */
-const COLECAO = { prj_rdos: "rdos", prj_demandas: "demandas", prj_custos: "custos", prj_ia: "ia", req_projetos: "projetos" };
+const COLECAO = { prj_rdos: "rdos", prj_demandas: "demandas", prj_custos: "custos", prj_ia: "ia", req_projetos: "projetos", prj_checkins: "checkins" };
 function reaplicarFila() {
   for (const it of fila) {
     if (it.tabela === "prj_fichas") { if (it.op === "up") S.fichas[it.obj.projeto_id] = it.obj.dados; else delete S.fichas[it.id]; continue; }
@@ -202,6 +202,10 @@ async function carregar() {
     novo.demandas = d.filter(x => unidadeDe(x) === UN);
     novo.custos = c.filter(x => unidadeDe(x) === UN);
     novo.ia = ia.filter(x => unidadeDe(x) === UN);
+    try {                                   // check-ins de turno (tabela opcional: supabase_checkins.sql)
+      const ck = await sb.from("prj_checkins").select("*").order("criado_em", { ascending: false }).limit(300);
+      novo.checkins = ck.error ? (S.checkins || []) : (ck.data || []).filter(x => unidadeDe(x) === UN);
+    } catch { novo.checkins = S.checkins || []; }
     S = novo; reaplicarFila(); guardarCache.agora();
   } catch (e) {
     console.warn("carregar:", e.message || e);
@@ -358,16 +362,17 @@ function render() {
   const h = (location.hash || "#/").split("?")[0];
   const [, rota = "", a, b] = h.split("/");
   const r = rota || "painel";
-  $$("#nav a, #tabbar a").forEach(x => x.classList.toggle("ativo", x.dataset.rota === (r === "p" ? "projetos" : r === "rdo" ? "rdos" : r)));
+  $$("#nav a, #tabbar a").forEach(x => x.classList.toggle("ativo", x.dataset.rota === (r === "p" ? "projetos" : r === "rdo" ? "rdos" : r === "checkin" ? "painel" : r)));
   $("#chip-unidade").textContent = UNI().nome;
   document.title = "Projetos " + UNI().nome;
   window.scrollTo({ top: 0 });
   if (!carregou && !S.projetos.length) { app.innerHTML = `<div class="carregando">Carregando…</div>`; return; }
   const aviso = faltaTabela ? `<div class="aviso">⚠️ Falta criar as tabelas do módulo de projetos no Supabase. Abra o SQL Editor do Supabase e rode o arquivo
     <code>projetos/supabase_projetos.sql</code> (uma vez só). Até lá, demandas, RDOs e fichas ficam salvos só neste aparelho.</div>` : "";
-  const telas = { painel: telaPainel, demandas: telaDemandas, projetos: telaProjetos, p: telaProjeto, rdos: telaRdos, rdo: telaRdo, ia: telaIA };
+  const telas = { painel: telaPainel, demandas: telaDemandas, projetos: telaProjetos, p: telaProjeto, rdos: telaRdos, rdo: telaRdo, ia: telaIA, checkin: telaCheckin };
   (telas[r] || telaPainel)(a, b);
   if (aviso) app.insertAdjacentHTML("afterbegin", aviso);
+  if (r !== "checkin") document.body.classList.remove("pg-checkin");
 }
 window.addEventListener("hashchange", () => { fecharFolha(); render(); });
 
@@ -385,13 +390,15 @@ function telaPainel() {
   const comAlerta = inds.filter(x => x.ind.alertas.length).length;
   const mes = hojeISO().slice(0, 7);
   const rdosMes = S.rdos.filter(r => String(r.data).startsWith(mes)).length;
-  const iaAbertas = S.ia.filter(i => i.status === "aberto");
+  const iaAbertas = S.ia.filter(i => i.status === "aberto" && i.tipo !== "resumo");   // o relatório já tem cartão próprio
   const top = abertas.sort(ordenarDemandas).slice(0, 6);
 
   app.innerHTML = `
     <div class="titulo"><h1>Painel</h1><span class="esp"></span>
       <button class="btn sec mini" id="btn-ctx">🤖 Contexto p/ Claude</button>
       <span class="sub">${diaSemana(hojeISO())}, ${dataBR(hojeISO())}</span></div>
+    ${cartaoCheckinPainel()}
+    ${cartaoRelatorio()}
     <div class="kpis">
       <a class="kpi ${venc ? "alerta" : ""}" href="#/demandas"><div class="rot">Demandas abertas</div><div class="val">${abertas.length}</div>
         <div class="det">${altas} alta${altas === 1 ? "" : "s"}${venc ? ` · <b style="color:var(--vermelho)">${venc} vencida${venc === 1 ? "" : "s"}</b>` : ""}</div></a>
@@ -412,6 +419,45 @@ function telaPainel() {
   ligarDemandas(app);
   ligarIA(app);
   $("#btn-ctx").onclick = () => folhaContexto();
+  const vm = $("#rel-mais"); if (vm) vm.onclick = () => { $("#rel-corpo").classList.toggle("aberto"); vm.textContent = $("#rel-corpo").classList.contains("aberto") ? "ver menos" : "ver relatório completo"; };
+}
+/* último relatório diário do Claude (prj_ia tipo "resumo") */
+function cartaoRelatorio() {
+  const r = S.ia.filter(i => i.tipo === "resumo").sort((a, b) => String(b.criado_em).localeCompare(String(a.criado_em)))[0];
+  if (!r) return "";
+  const pr = (r.dados && r.dados.prioridades) || [];
+  return `<div class="rel">
+    <div class="rel-topo"><span class="tag grafite">🤖 Relatório do Claude</span><span class="meta">${dataCurta(String(r.criado_em).slice(0, 10))}</span></div>
+    <h3>${esc(r.titulo)}</h3>
+    ${pr.length ? `<ol class="rel-prio">${pr.slice(0, 3).map(p => `<li><b>${esc(p.titulo)}</b>${p.motivo ? `<small>${esc(p.motivo)}</small>` : ""}</li>`).join("")}</ol>` : ""}
+    <div class="rel-corpo md" id="rel-corpo">${md(r.conteudo || "")}</div>
+    <button class="btn sec mini" id="rel-mais">ver relatório completo</button>
+  </div>`;
+}
+/* markdown simples (títulos, listas, negrito, itálico, tabelas simples) para os textos da IA */
+function md(txt) {
+  const linhas = String(txt || "").replace(/\r/g, "").split("\n");
+  const inline = (t) => esc(t).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/(^|[^*])\*([^*]+)\*/g, "$1<i>$2</i>").replace(/`([^`]+)`/g, "<code>$1</code>");
+  let html = "", lista = null, tabela = null;
+  const fechar = () => { if (lista) { html += `</${lista}>`; lista = null; } if (tabela) { html += "</tbody></table>"; tabela = null; } };
+  for (const l of linhas) {
+    const t = l.trim();
+    let m;
+    if (/^\|.*\|$/.test(t)) {
+      if (/^\|[\s:|-]+\|$/.test(t)) continue;
+      const cel = t.slice(1, -1).split("|").map(c => inline(c.trim()));
+      if (!tabela) { fechar(); tabela = true; html += `<table class="md-tab"><thead><tr>${cel.map(c => `<th>${c}</th>`).join("")}</tr></thead><tbody>`; }
+      else html += `<tr>${cel.map(c => `<td>${c}</td>`).join("")}</tr>`;
+      continue;
+    }
+    if ((m = /^(#{1,4})\s+(.*)$/.exec(t))) { fechar(); const n = Math.min(4, m[1].length + 2); html += `<h${n}>${inline(m[2])}</h${n}>`; continue; }
+    if ((m = /^[-*•]\s+(.*)$/.exec(t))) { if (lista !== "ul") { fechar(); lista = "ul"; html += "<ul>"; } html += `<li>${inline(m[1])}</li>`; continue; }
+    if ((m = /^\d+[.)]\s+(.*)$/.exec(t))) { if (lista !== "ol") { fechar(); lista = "ol"; html += "<ol>"; } html += `<li>${inline(m[1])}</li>`; continue; }
+    fechar();
+    if (t) html += `<p>${inline(t)}</p>`;
+  }
+  fechar();
+  return html;
 }
 function tempoMedio() {
   const lim = somaDias(hojeISO(), -30);
@@ -559,6 +605,7 @@ function folhaDemanda(d, extra = {}) {
 function folhaRapida() {
   abrirFolha(`Lançar`, `
     <div class="opcoes-rapidas">
+      <button data-op="ck" class="destaque"><span>🎙</span><div>Check-in do turno<small>entrevista rápida, 1 a 4 min</small></div></button>
       <button data-op="dem"><span>☑</span><div>Demanda<small>algo para fazer, do dia a dia</small></div></button>
       <button data-op="rdo"><span>▣</span><div>RDO de hoje<small>fotos, efetivo e avanço da obra</small></div></button>
       <button data-op="custo"><span>R$</span><div>Custo de projeto<small>serviço, mão de obra, extra</small></div></button>
@@ -566,6 +613,7 @@ function folhaRapida() {
     </div>`, (f) => {
     $$("[data-op]", f).forEach(b => b.onclick = () => {
       const op = b.dataset.op;
+      if (op === "ck") { fecharFolha(); location.hash = "#/checkin"; }
       if (op === "dem") folhaDemanda(null);
       if (op === "rdo") escolherProjetoParaRdo();
       if (op === "custo") escolherProjeto("Custo em qual projeto?", (pid) => folhaCusto(pid));
@@ -1132,7 +1180,7 @@ function cartaoIA(i) {
       ${i.prazo ? `<span class="meta">⏱ ${dataCurta(i.prazo)}</span>` : ""}<span class="esp" style="flex:1"></span>
       <span class="meta">${dataCurta(String(i.criado_em).slice(0, 10))}</span></div>
     <h3 style="margin-top:8px">${esc(i.titulo)}</h3>
-    ${i.conteudo ? `<div class="conteudo">${esc(i.conteudo).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")}</div>` : ""}
+    ${i.conteudo ? `<div class="conteudo md">${md(i.conteudo)}</div>` : ""}
     <div class="rodape">${i.status === "aberto"
       ? `<button class="btn sec mini" data-ia="${esc(i.id)}" data-st="feito">✓ Feito</button><button class="btn sec mini" data-ia="${esc(i.id)}" data-st="descartado">Descartar</button>`
       : `<span class="tag ${i.status === "feito" ? "ok" : ""}">${esc(i.status)}</span><button class="btn sec mini" data-ia="${esc(i.id)}" data-st="aberto">Reabrir</button>`}
@@ -1182,6 +1230,19 @@ function contextoIA() {
     if (ms.length) L.push(`- Marcos: ${ms.map(m => `${m.nome} (prev. ${m.prev ? dataBR(m.prev) : "?"}${m.real ? ", feito " + dataBR(m.real) : ""})`).join("; ")}`);
     const r = rdosDe(p.id)[0];
     if (r) L.push(`- Último RDO nº ${r.numero} em ${dataBR(r.data)}: ${String(r.dados.ocorrencias || "").replace(/\s+/g, " ").slice(0, 400) || "(sem observações)"}`);
+    L.push("");
+  }
+  const cks = (S.checkins || []).slice().sort((a, b) => String(b.criado_em).localeCompare(String(a.criado_em))).slice(0, 6);
+  if (cks.length) {
+    L.push("## Últimos check-ins de turno");
+    for (const c of cks) {
+      const d = c.dados || {};
+      const pl = (d.plano_anterior || []); const feitos = pl.filter(p => p.resultado === "feito").length;
+      L.push(`- ${dataBR(c.data)} ${c.turno}: energia ${d.energia}/5, foco ${d.foco}/5; tempo: ${(d.alocacao || []).map(a => `${a.nome} ${a.horas}h`).join(", ")}` +
+        `${pl.length ? `; plano ${feitos}/${pl.length}` : ""}; interrupções ${(d.interrupcoes || {}).faixa || "?"}` +
+        `${(d.bloqueios || []).length ? `; bloqueios: ${d.bloqueios.map(b => `${b.projeto} (${b.tipo}${b.texto ? ": " + b.texto : ""})`).join("; ")}` : ""}` +
+        `${d.nota ? `; nota: ${d.nota.replace(/\s+/g, " ").slice(0, 300)}` : ""}`);
+    }
     L.push("");
   }
   L.push("## Demandas abertas");

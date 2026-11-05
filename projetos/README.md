@@ -17,6 +17,7 @@ Faz parte do mesmo site das Requisições: **mesmo Supabase (`../config.js`), me
 | **Demandas** | Captura em 1 linha + prioridade. Toque no círculo para concluir e no texto para detalhar (prazo, projeto, quem pediu) |
 | **Projetos** | Ficha (código, início, prazo, orçamento, escopo), atividades com %, marcos, custos (RM automática + serviços/extras), RDOs, demandas e IA do projeto |
 | **RDO** | Formulário no padrão FO 124 1454 005: clima, efetivo (+/−), equipamentos, % das atividades, ocorrências e fotos. Gera o PDF e abre o compartilhamento (WhatsApp) |
+| **Check-in de turno** | Entrevista de 1 a 4 minutos ao fim de cada turno (energia/foco, plano × realizado, horas por frente, avanço e bloqueios por projeto, demandas, interrupções, prioridades do próximo turno). Atualiza atividades e demandas sozinho |
 | **IA** | Planos de ação, metas e medidas de controle gravados pelo Claude, mais o botão "Contexto p/ Claude" |
 
 ### RDO sem retrabalho
@@ -27,7 +28,9 @@ Faz parte do mesmo site das Requisições: **mesmo Supabase (`../config.js`), me
 - As categorias de mão de obra e de equipamentos podem ser trocadas por projeto em **Editar**.
 
 ## Integração com o Claude
-Veja `CLAUDE_IA.md`.
+Veja `CLAUDE_IA.md`. O relatório diário (dias úteis, 06:36) segue `IA_RELATORIO_DIARIO.md` e aparece no Painel.
+
+Os check-ins precisam de `supabase_checkins.sql`, que já foi aplicado no banco.
 
 ## Arquivos
 - `index.html`, `projetos.css`, `projetos.js`: aplicativo

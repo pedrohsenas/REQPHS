@@ -24,6 +24,7 @@ Conecte o Claude ao Supabase pelo conector/MCP oficial do Supabase, com o projet
 | `prj_rdos` | RDOs (`dados.ocorrencias`, `dados.atividades`, `dados.maoObra`) |
 | `prj_fichas` | escopo, atividades, marcos e orçamento (`dados` jsonb) |
 | `prj_custos`, `v_prj_custo_material` | custos |
+| `prj_checkins`, `v_prj_checkins`, `v_prj_horas_dia` | check-ins de turno: energia, foco, horas por frente, plano × realizado, interrupções, bloqueios e notas |
 
 ### Onde o Claude escreve
 ```sql
