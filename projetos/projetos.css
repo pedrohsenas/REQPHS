@@ -330,3 +330,99 @@ pre.contexto{background:#1f1f22; color:#eaeaea; padding:14px; border-radius:var(
   .rdo-barra .btn{min-height:48px}
   .item{padding:12px}
 }
+
+/* ============================================================
+   CHECK-IN DE TURNO (entrevista)
+   ============================================================ */
+body.pg-checkin #tabbar{display:none}
+body.pg-checkin{padding-bottom:0}
+.ck{max-width:620px; margin:0 auto; min-height:calc(100dvh - var(--topo) - 40px); display:flex; flex-direction:column}
+.ck-topo{display:flex; align-items:center; gap:10px; position:sticky; top:var(--topo); z-index:15; background:var(--fundo); padding:6px 0 10px}
+.ck-sair{width:38px; height:38px; border-radius:50%; border:none; background:var(--branco); box-shadow:var(--sombra); font-size:15px; color:var(--grafite); cursor:pointer; flex:none}
+.ck-prog{flex:1; height:8px; border-radius:6px; background:var(--linha); overflow:hidden}
+.ck-prog div{height:100%; background:var(--vermelho); border-radius:6px; transition:width .25s}
+.ck-n{font-size:12px; color:var(--cinza); font-variant-numeric:tabular-nums; flex:none}
+.ck-corpo{flex:1; padding-bottom:16px}
+.ck-q{font-size:22px; line-height:1.25; color:var(--grafite); margin:10px 0 6px; letter-spacing:-.01em}
+.ck-dica{color:var(--cinza); font-size:14px; margin:0 0 14px; line-height:1.45}
+.ck-rot{font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--cinza); font-weight:700; margin:18px 0 8px}
+.ck-chips{display:flex; flex-wrap:wrap; gap:8px}
+.ck-chip{min-height:44px; padding:0 16px; border-radius:22px; border:1.5px solid var(--linha); background:#fff; font-size:15px; font-weight:500; color:var(--tinta); cursor:pointer}
+.ck-chip.on{background:var(--grafite); border-color:var(--grafite); color:#fff}
+.ck-escala{display:grid; grid-template-columns:repeat(5,1fr); gap:6px}
+.ck-escala button{display:flex; flex-direction:column; align-items:center; gap:3px; padding:10px 2px; border-radius:12px; border:1.5px solid var(--linha); background:#fff; cursor:pointer}
+.ck-escala button span{font-size:26px; line-height:1}
+.ck-escala button small{font-size:11px; color:var(--cinza)}
+.ck-escala button.on{border-color:var(--vermelho); background:var(--vermelho-suave)}
+.ck-escala button.on small{color:var(--vermelho-escuro); font-weight:600}
+.ck-cartao{background:#fff; border:1px solid var(--linha); border-radius:var(--raio); padding:12px; margin-bottom:10px; box-shadow:var(--sombra)}
+.ck-cartao.mudou{border-color:var(--verde); box-shadow:0 0 0 2px var(--verde-suave)}
+.ck-tit{font-weight:600; line-height:1.35; margin-bottom:10px; display:flex; flex-wrap:wrap; gap:6px; align-items:center}
+.ck-tit small{font-weight:500; color:var(--cinza); margin-left:auto}
+.ck-cartao .ck-chip{min-height:40px; padding:0 12px; font-size:14px}
+.ck-cartao .pct-rapido button{height:40px}
+.ck-frente{background:#fff; border:1.5px solid var(--linha); border-radius:var(--raio); margin-bottom:8px; overflow:hidden}
+.ck-frente.on{border-color:var(--grafite)}
+.ck-fr-nome{width:100%; text-align:left; border:none; background:none; padding:13px 14px; font-size:15px; font-weight:500; color:var(--tinta); cursor:pointer; display:flex; gap:8px}
+.ck-frente.on .ck-fr-nome{background:var(--grafite); color:#fff}
+.ck-frente.on .ck-fr-nome::after{content:"✓"; margin-left:auto}
+.ck-horas{display:grid; grid-template-columns:repeat(6,1fr); gap:4px; padding:8px}
+.ck-horas button{height:40px; border:1px solid var(--linha); border-radius:8px; background:#fff; font-size:14px; cursor:pointer; color:var(--grafite)}
+.ck-horas button.on{background:var(--vermelho); border-color:var(--vermelho); color:#fff; font-weight:700}
+.ck-nova{display:flex; flex-wrap:wrap; gap:8px; align-items:center}
+.ck-nova input{flex:1 1 100%}
+.ck-nova .ck-chips{flex:1}
+.ck-nova .ck-chip{min-height:38px; padding:0 12px; font-size:13.5px}
+#ck-livre input{flex:1 1 auto; width:auto}
+.ck-novai, .ck-seli{display:flex; align-items:center; gap:8px; background:#fff; border:1px solid var(--linha); border-radius:var(--raio-mini); padding:8px 6px 8px 10px; margin-top:8px}
+.ck-novai span:nth-child(2), .ck-seli span{flex:1; line-height:1.35}
+.ck-novai button, .ck-seli button{border:none; background:none; color:var(--cinza-claro); font-size:15px; width:34px; height:34px; cursor:pointer}
+.ck-seli b{width:26px; height:26px; border-radius:50%; background:var(--vermelho); color:#fff; display:flex; align-items:center; justify-content:center; font-size:13px; flex:none}
+.ck-sel{margin-bottom:12px}
+.ck-sugs{display:flex; flex-direction:column; gap:8px}
+.ck-sug{text-align:left; border:1.5px solid var(--linha); background:#fff; border-radius:var(--raio-mini); padding:10px 12px; cursor:pointer; display:flex; flex-direction:column; gap:2px}
+.ck-sug-t{font-size:15px; font-weight:500; color:var(--tinta); line-height:1.35}
+.ck-sug small{font-size:12px; color:var(--cinza)}
+.ck-sug.on{border-color:var(--vermelho); background:var(--vermelho-suave)}
+.ck-resumo{background:var(--fundo); border:1px dashed var(--cinza-claro); border-radius:var(--raio); padding:4px 14px 10px; margin-top:16px}
+.ck-resumo ul{margin:0; padding-left:18px; font-size:14px; line-height:1.6}
+.ck-nav{position:sticky; bottom:0; display:flex; gap:8px; padding:10px 0 calc(10px + env(safe-area-inset-bottom)); background:rgba(244,243,245,.95); backdrop-filter:blur(6px)}
+.ck-nav .btn{flex:1; min-height:52px; font-size:16px}
+.ck-nav .btn:first-child{flex:0 0 34%}
+.ck-fim{max-width:520px; margin:24px auto; text-align:center}
+.ck-fim h1{font-size:22px; color:var(--grafite); margin:8px 0 4px}
+.ck-ok{width:64px; height:64px; border-radius:50%; background:var(--verde); color:#fff; font-size:32px; display:flex; align-items:center; justify-content:center; margin:0 auto}
+.ck-fim .kpi{text-align:left}
+
+/* cartões do painel */
+.ck-cta{display:flex; align-items:center; gap:12px; text-decoration:none; background:var(--vermelho); color:#fff; border-radius:var(--raio); padding:14px 16px; margin-bottom:12px; box-shadow:0 6px 18px rgba(229,26,65,.28)}
+.ck-cta b{display:block; font-size:16px}
+.ck-cta small{display:block; opacity:.9; font-size:13px; margin-top:2px}
+.ck-cta-ic{font-size:26px}
+.ck-cta-seta{margin-left:auto; font-size:28px; line-height:1}
+.ck-feito{display:flex; align-items:center; gap:12px; background:var(--verde-suave); border:1px solid #bfe0cb; border-radius:var(--raio); padding:12px 14px; margin-bottom:12px}
+.ck-feito > span{width:30px; height:30px; border-radius:50%; background:var(--verde); color:#fff; display:flex; align-items:center; justify-content:center; flex:none}
+.ck-feito b{display:block; color:var(--verde)}
+.ck-feito small{display:block; color:var(--cinza); font-size:12.5px; margin-top:2px; line-height:1.4}
+.ck-feito .btn{margin-left:auto; flex:none}
+.opcoes-rapidas button.destaque{border-color:var(--vermelho); background:var(--vermelho-suave)}
+
+/* relatório do Claude */
+.rel{background:#fff; border:1px solid var(--linha); border-left:4px solid var(--grafite); border-radius:var(--raio); padding:14px; margin-bottom:12px; box-shadow:var(--sombra)}
+.rel-topo{display:flex; align-items:center; justify-content:space-between; gap:8px}
+.rel h3{margin:8px 0 6px; font-size:16px; color:var(--tinta)}
+.rel-prio{margin:6px 0 10px; padding-left:22px; display:flex; flex-direction:column; gap:6px}
+.rel-prio li{line-height:1.35}
+.rel-prio small{display:block; color:var(--cinza); font-size:12.5px}
+.rel-corpo{max-height:0; overflow:hidden; transition:max-height .25s}
+.rel-corpo.aberto{max-height:4000px; margin-bottom:10px}
+.md{font-size:14px; line-height:1.55}
+.md h3, .md h4, .md h5, .md h6{margin:14px 0 6px; color:var(--grafite); font-size:14.5px}
+.md p{margin:6px 0}
+.md ul, .md ol{margin:6px 0; padding-left:20px}
+.md li{margin:2px 0}
+.md code{background:var(--fundo); padding:1px 5px; border-radius:4px; font-size:13px}
+.md-tab{border-collapse:collapse; width:100%; font-size:13px; margin:8px 0; display:block; overflow-x:auto}
+.md-tab th, .md-tab td{border:1px solid var(--linha); padding:5px 8px; text-align:left}
+.md-tab th{background:var(--fundo)}
+.ia-item .conteudo.md{white-space:normal}
