@@ -573,6 +573,14 @@ body[data-unidade="UIS"] .unidade-chip, body[data-unidade="UIS"] select.unidade-
 body[data-unidade="UIS"] .pagina-titulo .etiqueta.tipo{background-color:var(--vermelho); border-color:var(--vermelho)}
 .pagina-titulo .etiqueta.tipo{font-size:12px; padding:3px 10px; border-radius:6px}
 
+/* estado da sincronia com a nuvem (clique = conferir agora) */
+.status-sinc{border:none; background:none; font:inherit; font-size:12px; cursor:pointer; padding:3px 6px; border-radius:6px; color:var(--cinza); white-space:nowrap}
+.status-sinc[hidden]{display:none}
+.status-sinc:hover{background:var(--fundo)}
+.status-sinc[data-estado=vivo], .status-sinc[data-estado=ok]{color:var(--verde)}
+.status-sinc[data-estado=pend]{color:#8a6a00}
+.status-sinc[data-estado=fora]{color:var(--vermelho)}
+
 /* menu: tela atual */
 #topo nav .nav-link.ativo, #topo nav a.btn.sec.ativo{background:var(--vermelho-suave); color:var(--vermelho-escuro)}
 

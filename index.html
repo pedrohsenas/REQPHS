@@ -3,16 +3,23 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- Política de segurança: só roda código deste site e das duas bibliotecas fixadas abaixo;
+     nenhum script embutido em página ou em dado é executado; conexões só com o Supabase. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://*.supabase.co wss://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'">
+<meta name="referrer" content="no-referrer">
 <title>Recursos Materiais</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
+<!-- Bibliotecas externas: versão fixa + assinatura (integrity). Se o arquivo no servidor for trocado, o navegador recusa. -->
 <!-- SheetJS: leitura do .xlsx do banco de dados direto no navegador -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"
+        integrity="sha384-vtjasyidUo0kW94K5MXDXntzOJpQgBKXmE7e2Ga4LG0skTTLeBi97eFAXsqewJjw" crossorigin="anonymous"></script>
 <!-- Supabase: banco on-line e login multiusuário -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0/dist/umd/supabase.js"
+        integrity="sha384-uteMfOloLDGt042uDz+xHGF3ym63/WQ6rFq7murQRG8Ih7QrXGEGNtWd8688sb4O" crossorigin="anonymous"></script>
 <script src="config.js"></script>
 </head>
 <body>
@@ -31,7 +38,7 @@
 
 <header id="topo" class="no-print">
   <div class="marca">
-    <img class="logo-img" src="favicon.svg" alt="" onerror="this.remove()">
+    <img class="logo-img" src="favicon.svg" alt="" data-some>
     <strong>Recursos Materiais</strong>
     <span id="unidade-ctl" class="unidade-ctl"></span>
   </div>
@@ -45,6 +52,7 @@
     <button id="btn-sair" class="btn sec" hidden title="Sair da conta">Sair</button>
   </nav>
   <div id="status-banco" class="status-banco">banco: carregando…</div>
+  <button id="status-sinc" class="status-sinc" hidden></button>
 </header>
 
 <main id="app"></main>

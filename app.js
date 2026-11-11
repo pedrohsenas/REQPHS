@@ -144,17 +144,52 @@ function desenharMarca() {
    pela FUNÇÃO no cadastro, entre as pessoas visíveis na unidade:
    até R$ 5 mil → supervisor de manutenção; até R$ 30 mil → + gerente
    industrial; acima → supervisor + gerente industrial + gerente de operações. */
+/* ---------- intertravamento com o cadastro de pessoas ----------
+   Nomes gravados nas listas (solicitante, autor, assinaturas) precisam
+   existir no cadastro. Um nome antigo/abreviado é ligado ao cadastro quando
+   há UM só candidato compatível: mesmo nome sem acento/maiúsculas, ou mesmo
+   primeiro e último nome com os do meio iguais ou abreviados
+   ("Pedro Henrique Sena de Souza" ↔ "Pedro Henrique S. de Souza"). */
+const CONECTIVOS = new Set(["DE", "DA", "DO", "DAS", "DOS", "E"]);
+const tokensNome = (s) => norm(s).replace(/[.,\-]/g, " ").split(/\s+/).filter(t => t && !CONECTIVOS.has(t));
+function nomesCompativeis(a, b) {
+  const x = tokensNome(a), y = tokensNome(b);
+  if (x.length < 2 || y.length < 2) return x.join(" ") === y.join(" ") && x.length > 0;
+  if (x[0] !== y[0] || x[x.length - 1] !== y[y.length - 1]) return false;
+  const [cur, lon] = x.length <= y.length ? [x.slice(1, -1), y.slice(1, -1)] : [y.slice(1, -1), x.slice(1, -1)];
+  let j = 0;                                          // meio do mais curto, em ordem, dentro do mais longo
+  for (const t of cur) {
+    while (j < lon.length && !(lon[j] === t || (t.length === 1 && lon[j][0] === t) || (lon[j].length === 1 && t[0] === lon[j]))) j++;
+    if (j++ >= lon.length) return false;
+  }
+  return true;
+}
+/* devolve o nome exato do cadastro (ou "" se não houver um único compatível) */
+function nomeDoCadastro(nome, un = UN) {
+  const v = String(nome || "").trim();
+  if (!v) return "";
+  const todos = pessoas || PESSOAS_PADRAO;
+  if (todos.some(p => p.nome === v)) return v;
+  const unico = (lista) => lista.length === 1 ? lista[0].nome : "";
+  const iguais = todos.filter(p => norm(p.nome).replace(/\s+/g, " ").trim() === norm(v).replace(/\s+/g, " "));
+  if (iguais.length) return unico(iguais) || unico(iguais.filter(p => naUnidade(unidadeDaPessoa(p), un)));
+  const comp = todos.filter(p => nomesCompativeis(p.nome, v));
+  return unico(comp) || unico(comp.filter(p => naUnidade(unidadeDaPessoa(p), un)));
+}
+const noCadastro = (nome) => !!nome && (pessoas || PESSOAS_PADRAO).some(p => p.nome === nome);
+
 function papelNaUnidade(un, trecho, padrao) {
   const t = norm(trecho);
   const cand = pessoasUN(un).filter(p => norm(p.cargo).includes(t));
-  if (padrao && cand.some(p => p.nome === padrao)) return padrao;
+  const pad = nomeDoCadastro(padrao, un);               // padrão só vale se estiver no cadastro
+  if (pad && cand.some(p => p.nome === pad)) return pad;
   const p = cand.find(x => unidadeDaPessoa(x) === un) || cand[0];
-  return p ? p.nome : (padrao || "");
+  return p ? p.nome : pad;
 }
 function assinantesDaUnidade(un) {
   const U = UNIDADES[un] || UNIDADES.UIS3;
   return {
-    solicitante: U.padrao.solicitante,
+    solicitante: nomeDoCadastro(U.padrao.solicitante, un),
     supervisor:  papelNaUnidade(un, "SUPERVISOR DE MANUTEN", U.padrao.supervisor),
     gerente:     papelNaUnidade(un, "GERENTE INDUSTRIAL", U.padrao.gerente),
     corporativo: papelNaUnidade(un, "GERENTE DE OPERA", U.padrao.corporativo),
@@ -192,8 +227,8 @@ const EMISSAO_MODELO = "12/02/26";   // data de emissão do FORMULÁRIO padrão 
 const MM_NUMERO = "FO 185 1615-0014";
 const MM_EMISSAO = "13/02/25";       // emissão do formulário MM (fixa)
 const MM_NO = "00";
-const dataBR = (iso) => { if (!iso) return ""; const [a, m, d] = iso.split("-"); return `${d}/${m}/${a}`; };
-const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const dataBR = (iso) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso ?? "")); return m ? `${m[3]}/${m[2]}/${m[1]}` : ""; };   // só dígitos: seguro em qualquer lugar
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 /* normalização para busca: maiúsculas, sem acento */
 const norm = (s) => String(s ?? "").toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -210,13 +245,17 @@ function lerPreco(txt) {
 /* ---------------- armazenamento (localStorage) ---------------- */
 const LS = {
   ler(chave, padrao) { try { return JSON.parse(localStorage.getItem(chave)) ?? padrao; } catch { return padrao; } },
-  gravar(chave, v) { localStorage.setItem(chave, JSON.stringify(v)); },
+  gravar(chave, v) { if (LS.fechado) return; try { localStorage.setItem(chave, JSON.stringify(v)); } catch (e) { console.warn("armazenamento local:", e.message); } },
+  fechado: false,                             // saindo da conta: nada mais é gravado neste navegador
 };
 let projetos = LS.ler("rq.projetos", []);   // [{id, nome, status, autor, unidade}]
+if (!Array.isArray(projetos)) projetos = [];
 pessoas = LS.ler("rq.pessoas", PESSOAS_PADRAO);          // [{id, nome, cargo, email, unidade}]
 setores = LS.ler("rq.setores", [{ id: "s1", nome: "9313", unidade: "UIS3" }]);  // [{id, nome, unidade}]
 let listas   = LS.ler("rq.listas", []);     // ver novaLista()
+if (!Array.isArray(listas)) listas = [];
 let precos   = LS.ler("rq.precos", {});     // { chaveItem: {preco, em} }
+if (!precos || typeof precos !== "object" || Array.isArray(precos)) precos = {};
 const salvarTudo = () => { LS.gravar("rq.projetos", projetos); LS.gravar("rq.listas", listas); LS.gravar("rq.precos", precos); };
 const salvarCadastros = () => { LS.gravar("rq.pessoas", pessoas); LS.gravar("rq.setores", setores); };
 
@@ -228,18 +267,204 @@ const CFG = window.CONFIG_NUVEM || {};
 const nuvemAtiva = () => !!(CFG.url && CFG.anonKey && window.supabase);
 const sb = nuvemAtiva() ? window.supabase.createClient(CFG.url, CFG.anonKey) : null;
 
+/* ============================================================
+   SINCRONIA DAS LISTAS — a tela acompanha a nuvem
+   · cada lista tem uma VERSÃO na nuvem (coluna rev; sem ela, o relógio
+     atualizado_em). O navegador guarda a última versão que viu;
+   · gravar = "troque, desde que a versão ainda seja a que eu vi".
+     Se outra pessoa gravou antes, o navegador baixa a dela, JUNTA com
+     as minhas alterações e grava de novo — ninguém sobrescreve ninguém;
+   · mudanças dos outros chegam por tempo real (Realtime), ao abrir a
+     lista, ao voltar para a aba e por conferência periódica;
+   · o que não conseguiu subir fica marcado como pendente e sobe depois.
+   ============================================================ */
+/* JSON com chaves em ordem fixa: compara conteúdo sem depender da ordem (o banco reordena) */
+const canon = (v) => JSON.stringify(v, (k, x) => (x && typeof x === "object" && !Array.isArray(x))
+  ? Object.fromEntries(Object.keys(x).sort().map(c => [c, x[c]])) : x);
+const vistoNuvem = new Map();                  // id → { rev, em, json }: última versão vista/gravada
+const enviando = new Map();                    // id → conteúdo que está subindo agora (para reconhecer o próprio eco)
+let maiorEm = "";                              // relógio mais recente já visto na nuvem (conferência leve)
+const notarRelogio = (em) => { if (em && (!maiorEm || Date.parse(em) > Date.parse(maiorEm))) maiorEm = em; };
+let temRev = false;                            // a tabela tem a coluna rev (supabase_sincronia.sql)?
+const colsVersao = () => temRev ? "rev,atualizado_em" : "atualizado_em";
+const mesmaVersao = (a, b) => (a.rev != null && b.rev != null) ? +a.rev === +b.rev
+  : Date.parse(a.em || a.atualizado_em) === Date.parse(b.em || b.atualizado_em);
+const pendentes = new Set(LS.ler("rq.pendentes", []));      // ids com alteração ainda não confirmada pela nuvem
+function marcarPendente(id, sim) {
+  if (sim === pendentes.has(id)) return;
+  sim ? pendentes.add(id) : pendentes.delete(id);
+  LS.gravar("rq.pendentes", [...pendentes]);
+  if (LS.fechado) return;
+  try {                                         // guarda a versão de onde parti: junta certo mesmo se fechar a aba
+    const v = vistoNuvem.get(id);
+    if (sim && v) localStorage.setItem("rq.base." + id, v.json); else if (!sim) localStorage.removeItem("rq.base." + id);
+  } catch { /* cota cheia: segue em memória */ }
+}
+function verNuvem(id, v) {
+  vistoNuvem.set(id, v);
+  if (pendentes.has(id) && !LS.fechado) try { localStorage.setItem("rq.base." + id, v.json); } catch { /* idem */ }
+}
+/* de onde partiram as minhas alterações: última versão vista · foto do editor aberto · base guardada da sessão anterior */
+function baseDe(id, visto) {
+  if (visto) return JSON.parse(visto.json);
+  /* base guardada: existe justamente quando ficou alteração por enviar de uma sessão anterior */
+  try { const g = localStorage.getItem("rq.base." + id); if (g) return JSON.parse(g); } catch { /* sem base */ }
+  if (editorAtivo && editorAtivo.id === id && editorAtivo.base()) return editorAtivo.base();
+  return null;
+}
+
+/* ---------- higiene do que entra (nuvem, backup, cache): tipos e tamanhos previsíveis ---------- */
+const ID_OK = /^[A-Za-z0-9_-]{1,60}$/;
+const comoTexto = (v, max = 400) => v == null ? "" : String(v).slice(0, max);
+const comoNumero = (v) => { const n = typeof v === "number" ? v : parseFloat(v); return isFinite(n) ? n : 0; };
+function normalizarLista(d) {
+  if (!d || typeof d !== "object" || Array.isArray(d) || typeof d.id !== "string" || !ID_OK.test(d.id)) return null;
+  for (const c of ["__proto__", "constructor", "prototype"]) if (Object.prototype.hasOwnProperty.call(d, c)) delete d[c];
+  d.tipo = d.tipo === "MM" ? "MM" : "RM";
+  d.status = d.status === "concluida" ? "concluida" : "andamento";
+  for (const c of ["titulo", "projetoId", "autor", "numeroFO", "local", "areaSetor", "emissao", "revisao", "numero", "data",
+                   "solicitante", "setor", "projetoNum", "nrOS", "criadoEm", "unidade"])
+    if (d[c] != null && typeof d[c] !== "string") d[c] = comoTexto(d[c]);
+  for (const c of ["descricao", "observacao", "anotacoes"]) if (d[c] != null && typeof d[c] !== "string") d[c] = comoTexto(d[c], 20000);
+  d.itens = (Array.isArray(d.itens) ? d.itens : []).filter(i => i && typeof i === "object" && !Array.isArray(i)).map(i => {
+    i.codigo = comoTexto(i.codigo, 60); i.descricao = comoTexto(i.descricao, 400); i.un = comoTexto(i.un, 20);
+    for (const c of ["qtd", "preco", "qtdMin", "qtdMax"]) if (c in i) i[c] = comoNumero(i[c]);
+    if ("justificativa" in i) i.justificativa = comoTexto(i.justificativa, 400);
+    return i;
+  });
+  d.assinaturas = (Array.isArray(d.assinaturas) ? d.assinaturas : []).map(a => comoTexto(a, 200));
+  d.log = (Array.isArray(d.log) ? d.log : []).filter(e => e && typeof e === "object" && typeof e.em === "string")
+    .map(e => { e.por = comoTexto(e.por, 200); e.mudancas = Array.isArray(e.mudancas) ? e.mudancas.filter(m => m && typeof m.k === "string") : []; return e; });
+  return d;
+}
+const normalizarProjeto = (p) => (p && typeof p === "object" && typeof p.id === "string" && ID_OK.test(p.id))
+  ? { ...p, nome: comoTexto(p.nome, 200), autor: comoTexto(p.autor, 200), status: p.status === "arquivado" ? "arquivado" : "andamento" } : null;
+const normalizarPessoa = (p) => (p && typeof p === "object" && typeof p.id === "string" && ID_OK.test(p.id))
+  ? { ...p, nome: comoTexto(p.nome, 200), cargo: comoTexto(p.cargo, 200), email: comoTexto(p.email, 200) } : null;
+const normalizarSetor = (s) => (s && typeof s === "object" && typeof s.id === "string" && ID_OK.test(s.id))
+  ? { ...s, nome: comoTexto(s.nome, 60) } : null;
+
+/* ---------- junta três versões: base (a que eu tinha), local (minhas mudanças) e remota (dos outros) ----------
+   Campo a campo e item a item: vale a alteração de quem mexeu; se os dois mexeram no mesmo campo, vale a minha
+   (é o que está na minha tela). Altera "local" no próprio objeto — o editor aberto continua apontando para ele. */
+function mesclarLista(base, local, remoto) {
+  base = base || {};
+  const igual = (a, b) => canon(a ?? null) === canon(b ?? null);
+  for (const k of new Set([...Object.keys(local), ...Object.keys(remoto)])) {
+    if (k === "itens" || k === "log" || k === "id") continue;
+    if (igual(local[k], base[k]) && !igual(remoto[k], local[k])) {          // só o outro mexeu
+      if (remoto[k] === undefined) delete local[k]; else local[k] = remoto[k];
+    }
+  }
+  const mb = mapaItens({ itens: base.itens || [] }), ml = mapaItens(local), mr = mapaItens(remoto);
+  const chaveDe = new Map(), saida = [];
+  for (const [k, il] of ml) {
+    const ib = mb.get(k), ir = mr.get(k);
+    chaveDe.set(il, k);
+    if (!ir) { if (ib && igual(il, ib)) continue; saida.push(il); continue; }  // o outro removeu e eu não mexi → sai
+    if (ib) for (const c of new Set([...Object.keys(il), ...Object.keys(ir)])) {
+      if (igual(il[c], ib[c]) && !igual(ir[c], il[c])) { if (ir[c] === undefined) delete il[c]; else il[c] = ir[c]; }
+    }
+    saida.push(il);
+  }
+  for (const [k, ir] of mr) if (!ml.has(k) && !mb.has(k)) { chaveDe.set(ir, k); saida.push(ir); }   // item novo do outro
+  /* ordem: se eu não reordenei, segue a ordem do outro (itens só meus ficam onde estavam, no fim) */
+  const ordemL = [...ml.keys()].filter(k => mb.has(k)).join("\n"), ordemB = [...mb.keys()].filter(k => ml.has(k)).join("\n");
+  if (ordemL === ordemB) {
+    const pos = new Map([...mr.keys()].map((k, n) => [k, n]));
+    const idx = (it) => pos.has(chaveDe.get(it)) ? pos.get(chaveDe.get(it)) : Infinity;
+    saida.sort((a, b) => (idx(a) === idx(b)) ? 0 : idx(a) - idx(b));
+  }
+  local.itens = saida;
+  /* histórico de edições: une as entradas (a mesma entrada estendida fica com a versão mais recente) */
+  const porChave = new Map();
+  for (const e of [...(remoto.log || []), ...(local.log || [])]) {
+    const ch = (e.inicio || e.em) + "|" + e.por, ja = porChave.get(ch);
+    if (!ja || String(e.em) >= String(ja.em)) porChave.set(ch, e);
+  }
+  local.log = [...porChave.values()].sort((a, b) => String(a.em).localeCompare(String(b.em))).slice(-LOG_MAX);
+  return local;
+}
+
+/* ---------- aplica no navegador uma versão que veio da nuvem ---------- */
+function aplicarListaRemota(dadosRemotos, versao) {
+  const rem = normalizarLista(dadosRemotos);
+  if (!rem) return false;
+  const id = rem.id, visto = vistoNuvem.get(id);
+  if (visto && mesmaVersao(visto, versao)) return false;                     // já tenho essa versão (eco da minha gravação)
+  if (editorAtivo && editorAtivo.id === id) editorAtivo.assentar();          // o que estou digitando agora entra como alteração minha
+  const jsonR = canon(rem);
+  const novoVisto = { rev: versao.rev, em: versao.em || versao.atualizado_em, json: jsonR };
+  notarRelogio(novoVisto.em);
+  const local = listas.find(l => l.id === id);
+  if (!local) { listas.push(rem); verNuvem(id, novoVisto); return true; }
+  const jsonL = canon(local);
+  if (jsonL === jsonR || enviando.get(id) === jsonR) { verNuvem(id, novoVisto); return false; }   // igual, ou é o eco do que acabei de enviar
+  const tenhoMudancas = pendentes.has(id) || (visto ? jsonL !== visto.json : false);
+  if (tenhoMudancas) mesclarLista(baseDe(id, visto), local, rem);
+  else { for (const k of Object.keys(local)) delete local[k]; Object.assign(local, rem); }    // mesmo objeto: o editor aberto enxerga
+  verNuvem(id, novoVisto);
+  return canon(local) !== jsonL;                       // a tela precisa mudar?
+}
+
+/* ---------- grava uma lista (com conferência de versão e junção automática) ----------
+   devolve true · "mesclado" (gravou depois de juntar com alterações de outra pessoa) · false (não gravou) */
 async function nuvemSalvarLista(l) {
   if (!sb) return true;                       // modo local: gravar no navegador já é "salvo"
+  const eraPendente = pendentes.has(l.id);
+  marcarPendente(l.id, true);
+  let mesclou = false;
   try {
-    const { error } = await sb.from("req_listas").upsert({ id: l.id, dados: l, atualizado_em: new Date().toISOString() });
-    if (error) { console.warn("nuvem/listas:", error.message); return false; }
-    return true;
+    for (let tentativa = 0; tentativa < 4; tentativa++) {
+      const visto = vistoNuvem.get(l.id);
+      const corpo = { dados: l, atualizado_em: new Date().toISOString() };
+      const enviado = canon(l);
+      let q;
+      if (!visto) q = sb.from("req_listas").insert({ id: l.id, ...corpo });
+      else {
+        q = sb.from("req_listas").update(corpo).eq("id", l.id);
+        q = (temRev && visto.rev != null) ? q.eq("rev", visto.rev) : q.eq("atualizado_em", visto.em);
+      }
+      enviando.set(l.id, enviado);
+      const { data, error } = await q.select(colsVersao());
+      if (error && !(!visto && error.code === "23505")) { console.warn("nuvem/listas:", error.message); return false; }
+      if (!error && data && data.length) {
+        verNuvem(l.id, { rev: data[0].rev, em: data[0].atualizado_em, json: enviado });
+        notarRelogio(data[0].atualizado_em);
+        if (canon(l) === enviado) marcarPendente(l.id, false);                 // nada mudou enquanto gravava
+        return mesclou ? "mesclado" : true;
+      }
+      /* não gravou: outra pessoa gravou antes de mim (ou excluiu) → baixa a dela e junta */
+      const r = await sb.from("req_listas").select("dados," + colsVersao()).eq("id", l.id).maybeSingle();
+      if (r.error) { console.warn("nuvem/listas:", r.error.message); return false; }
+      if (!r.data) { vistoNuvem.delete(l.id); continue; }                      // foi excluída lá: recria com o que tenho
+      const rem = normalizarLista(r.data.dados);
+      if (!rem) return false;
+      if (canon(rem) !== enviado) {
+        if (editorAtivo && editorAtivo.id === l.id) editorAtivo.assentar();
+        const b = baseDe(l.id, visto);
+        if (b || eraPendente) mesclarLista(b, l, rem);                     // junta as minhas mudanças com as dela
+        else { for (const k of Object.keys(l)) delete l[k]; Object.assign(l, rem); }   // sem referência do que mudei: fica a da nuvem
+        mesclou = true;
+      }
+      verNuvem(l.id, { rev: r.data.rev, em: r.data.atualizado_em, json: canon(rem) });
+    }
+    return false;
   } catch (e) { console.warn("nuvem/listas:", e.message); return false; }
+  finally { enviando.delete(l.id); mostrarSinc(); }
 }
 async function nuvemExcluirLista(id) {
+  vistoNuvem.delete(id); marcarPendente(id, false);
   if (!sb) return;
-  await sb.from("req_listas").delete().eq("id", id);
+  const { error } = await sb.from("req_listas").delete().eq("id", id);
+  if (error) console.warn("nuvem/listas (excluir):", error.message);
 }
+
+/* o que estava guardado neste navegador passa pela mesma higiene do que vem da nuvem */
+listas = listas.map(normalizarLista).filter(Boolean);
+projetos = projetos.map(normalizarProjeto).filter(Boolean);
+pessoas = (Array.isArray(pessoas) ? pessoas : PESSOAS_PADRAO).map(normalizarPessoa).filter(Boolean);
+setores = (Array.isArray(setores) ? setores : []).map(normalizarSetor).filter(Boolean);
 /* Colunas novas (unidade, status, autor) dependem do supabase_unidades.sql.
    Enquanto ele não for rodado, grava o que a tabela aceitar e avisa. */
 const colunasFaltando = new Set();             // "tabela.coluna" ausentes na nuvem
@@ -284,42 +509,227 @@ async function nuvemSalvarPreco(chave, reg) {
   await sb.from("req_precos").upsert({ chave, preco: reg.preco, em: reg.em });
 }
 
-/* carrega listas/projetos/preços compartilhados e redesenha */
-async function carregarNuvem() {
-  if (!sb) return;
-  try {
-    const [p, l, pr] = await Promise.all([
-      sb.from("req_projetos").select("*"),
-      sb.from("req_listas").select("dados"),
-      sb.from("req_precos").select("*"),
-    ]);
-    if (p.error || l.error || pr.error) throw new Error((p.error || l.error || pr.error).message);
+/* ---------- conferência com a nuvem: 1ª carga, periódica, ao voltar para a aba e sob demanda ---------- */
+let sincEmCurso = null, ultimaSinc = 0, primeiraCarga = true, canalLigado = false, semConexao = false;
+/* "ao vivo" só vale com o canal ligado E o banco preparado (o mesmo SQL que cria a coluna rev liga os avisos das tabelas) */
+const aoVivo = () => canalLigado && temRev;
+function mostrarSinc() {
+  const el = $("#status-sinc"); if (!el) return;
+  if (!sb) { el.hidden = true; return; }
+  el.hidden = false;
+  const estado = semConexao ? "fora" : (pendentes.size ? "pend" : (aoVivo() ? "vivo" : "ok"));
+  el.dataset.estado = estado;
+  el.textContent = { fora: "● sem conexão", pend: `● ${pendentes.size} a enviar`, vivo: "● ao vivo", ok: "● sincronizado" }[estado];
+  el.title = (ultimaSinc ? "Última conferência com a nuvem: " + new Date(ultimaSinc).toLocaleTimeString("pt-BR") + ". " : "")
+    + (aoVivo() ? "Mudanças dos colegas chegam na hora." : "Conferindo a cada 30 s e sempre que uma requisição é aberta.") + " Clique para conferir agora.";
+}
+/* o banco devolve no máximo 1000 linhas por consulta: busca em páginas, pela chave, até acabar
+   (sem isso, passando de 1000 registros os últimos simplesmente não apareceriam) */
+async function buscarPorChave(tabela, cols, chave = "id", pagina = 1000) {
+  const tudo = []; let ultimo = null;
+  for (;;) {
+    let q = sb.from(tabela).select(cols, { count: "exact" }).order(chave, { ascending: true }).limit(pagina);
+    if (ultimo != null) q = q.gt(chave, ultimo);
+    const { data, error, count } = await q;
+    if (error) return { data: null, error };
+    tudo.push(...(data || []));
+    /* acabou? vale a contagem do banco (o limite por consulta do servidor pode ser menor que a página pedida) */
+    const acabou = !data || !data.length || (count != null ? data.length >= count : data.length < pagina);
+    if (acabou) return { data: tudo, error: null };
+    ultimo = data[data.length - 1][chave];
+  }
+}
+let ultimoToque = 0;                                  // última vez que o usuário digitou algo
+document.addEventListener("input", () => { ultimoToque = Date.now(); }, true);
+async function baixarCadastros() {
+  /* tabelas pequenas: baixa inteiras e diz se algo mudou */
+  const antes = canon([projetos, pessoas, setores]);
+  const [p, pe, se] = await Promise.all([
+    buscarPorChave("req_projetos", "*"), buscarPorChave("req_pessoas", "*"), buscarPorChave("req_setores", "*"),
+  ]);
+  const semColuna = (rows, tabela, cols) => {
+    if (rows && rows.length) cols.forEach(c => { if (!(c in rows[0])) colunasFaltando.add(tabela + "." + c); });
+  };
+  if (!p.error) {
     projetos = (p.data || []).map(r => {
       const o = { id: r.id, nome: r.nome };
       for (const k of ["status", "autor", "unidade"]) if (r[k] != null && r[k] !== "") o[k] = r[k];
-      return o;
-    });
-    const semColuna = (rows, tabela, cols) => {
-      if (rows && rows.length) cols.forEach(c => { if (!(c in rows[0])) colunasFaltando.add(tabela + "." + c); });
-    };
+      return normalizarProjeto(o);
+    }).filter(Boolean);
     semColuna(p.data, "req_projetos", ["unidade", "status", "autor"]);
-    listas = (l.data || []).map(r => r.dados);
-    precos = Object.fromEntries((pr.data || []).map(r => [r.chave, { preco: +r.preco, em: r.em }]));
-    /* cadastros (tabelas podem não existir ainda; tolerante a erro) */
-    try {
-      const pe = await sb.from("req_pessoas").select("*");
-      if (!pe.error && pe.data && pe.data.length) { pessoas = pe.data; semColuna(pe.data, "req_pessoas", ["unidade"]); }
-    } catch { /* mantém local */ }
-    try {
-      const se = await sb.from("req_setores").select("*");
-      if (!se.error && se.data && se.data.length) { setores = se.data; semColuna(se.data, "req_setores", ["unidade"]); }
-    } catch { /* mantém local */ }
-    deduzirUsuario();
-    salvarTudo(); salvarCadastros();   // cache local para abrir rápido na próxima vez
-    render();
-  } catch (e) {
-    console.warn("nuvem: usando cache local (", e.message, ")");
   }
+  if (!pe.error && pe.data && pe.data.length) { pessoas = pe.data.map(normalizarPessoa).filter(Boolean); semColuna(pe.data, "req_pessoas", ["unidade"]); }
+  if (!se.error && se.data && se.data.length) { setores = se.data.map(normalizarSetor).filter(Boolean); semColuna(se.data, "req_setores", ["unidade"]); }
+  deduzirUsuario();
+  return canon([projetos, pessoas, setores]) !== antes;
+}
+/* completa = confere também exclusões e cadastros (1ª carga, a cada 5 min, ao reconectar e sob demanda);
+   leve = só o que mudou desde o relógio mais recente que já vi (uma consulta pequena) */
+let ultimaCompleta = 0, querCompleta = false;
+function sincronizar(completa = false) {
+  if (!sb || !emailSessao) return Promise.resolve(false);
+  if (completa) querCompleta = true;
+  if (sincEmCurso) return sincEmCurso;
+  sincEmCurso = (async () => {
+    const mudadas = new Set(), removidas = new Set();
+    const eraPrimeira = primeiraCarga;
+    const fazCompleta = eraPrimeira || querCompleta || Date.now() - ultimaCompleta > 300000;
+    querCompleta = false;
+    let cadastrosMudaram = false, naNuvem = null;
+    try {
+      if (eraPrimeira) {
+        let r = await buscarPorChave("req_listas", "id,dados,rev,atualizado_em", "id", 200);
+        const semRev = !!r.error && (r.error.code === "42703" || /\brev\b/.test(r.error.message || ""));
+        if (semRev) r = await buscarPorChave("req_listas", "id,dados,atualizado_em", "id", 200);   // banco ainda sem a coluna rev
+        if (r.error) throw new Error(r.error.message);
+        temRev = !semRev;
+        for (const row of r.data || []) if (aplicarListaRemota(row.dados, row)) mudadas.add(row.id);
+        naNuvem = new Set((r.data || []).map(x => x.id));
+      } else if (fazCompleta || !temRev) {
+        /* lista de versões (leve): baixa só o que mudou e percebe o que foi excluído.
+           Sem a coluna rev o relógio é o de cada computador — por isso aqui confere sempre pela lista inteira. */
+        const v = await buscarPorChave("req_listas", "id," + colsVersao());
+        if (v.error) throw new Error(v.error.message);
+        const baixar = (v.data || []).filter(r => { const visto = vistoNuvem.get(r.id); return !visto || !mesmaVersao(visto, r); }).map(r => r.id);
+        for (let i = 0; i < baixar.length; i += 50) {
+          const d = await sb.from("req_listas").select("id,dados," + colsVersao()).in("id", baixar.slice(i, i + 50));
+          if (d.error) throw new Error(d.error.message);
+          for (const row of d.data || []) if (aplicarListaRemota(row.dados, row)) mudadas.add(row.id);
+        }
+        naNuvem = new Set((v.data || []).map(x => x.id));
+      } else {
+        let q = sb.from("req_listas").select("id,dados," + colsVersao());
+        if (maiorEm) q = q.gt("atualizado_em", maiorEm);
+        const d = await q;
+        if (d.error) throw new Error(d.error.message);
+        for (const row of d.data || []) if (aplicarListaRemota(row.dados, row)) mudadas.add(row.id);
+      }
+      if (naNuvem) {
+        /* o que sumiu da nuvem foi excluído por alguém — a não ser que seja meu e ainda esteja por enviar */
+        for (const l of [...listas]) {
+          if (naNuvem.has(l.id) || pendentes.has(l.id)) continue;
+          listas = listas.filter(x => x !== l); vistoNuvem.delete(l.id); removidas.add(l.id);
+        }
+      }
+      if (fazCompleta) {
+        cadastrosMudaram = await baixarCadastros();      // projetos, pessoas e setores
+        if (eraPrimeira) {                                // preços: só na 1ª carga (depois chegam por tempo real)
+          const pr = await buscarPorChave("req_precos", "*", "chave");
+          if (!pr.error) precos = Object.fromEntries((pr.data || []).filter(r => r && typeof r.chave === "string")
+            .map(r => [r.chave, { preco: +r.preco || 0, em: comoTexto(r.em, 20) }]));
+        }
+        ultimaCompleta = Date.now();
+      }
+      primeiraCarga = false; semConexao = false; ultimaSinc = Date.now();
+      if (fazCompleta || mudadas.size || removidas.size) { salvarTudo(); salvarCadastros(); }      // cache local para abrir rápido na próxima vez
+      /* sobe o que estava por enviar (ficou offline, aba fechada no meio…) */
+      for (const id of [...pendentes]) {
+        const l = listas.find(x => x.id === id);
+        if (!l) { marcarPendente(id, false); continue; }
+        if (editorAtivo && editorAtivo.id === id) continue;            // o editor aberto cuida da própria gravação
+        const ref = baseDe(id, vistoNuvem.get(id));                     // o que mudou desde a versão da nuvem entra no histórico
+        const mud = ref ? diffLista(ref, l) : [];
+        const desfazer = mud.length ? registrarLog(l, mud) : () => {};
+        if (await nuvemSalvarLista(l)) mudadas.add(id); else desfazer();
+      }
+      if (eraPrimeira && !(editorAtivo && Date.now() - ultimoToque < 20000)) {
+        if (editorAtivo && mudadas.has(editorAtivo.id)) editorAtivo.recarregar();   // separa o que é meu do que veio dos colegas
+        render();
+      }
+      else if (mudadas.size || removidas.size || cadastrosMudaram) refletirSinc(mudadas, removidas, cadastrosMudaram);
+      return true;
+    } catch (e) {
+      semConexao = true;
+      console.warn("nuvem: sem sincronizar agora (", e.message, ")");
+      if ($("#aguardando-nuvem")) render();           // estava esperando a nuvem: segue com o que há neste navegador
+      return false;
+    } finally {
+      sincEmCurso = null; mostrarSinc();
+      if (querCompleta && !semConexao) setTimeout(() => sincronizar(), 50);
+    }
+  })();
+  return sincEmCurso;
+}
+const carregarNuvem = sincronizar;                    // nome antigo, mesma função
+
+/* ---------- mostra na tela o que mudou ---------- */
+let tRedesenho = null;
+function refletirSinc(mudadas, removidas) {
+  if (editorAtivo) {
+    const id = editorAtivo.id;
+    if (removidas.has(id)) {
+      editorAtivo.abandonar();
+      toast("Esta requisição foi excluída por outra pessoa.");
+      location.hash = "#/";
+    } else if (mudadas.has(id)) editorAtivo.recarregar();
+    return;                                           // outras listas: a tela inicial mostra quando eu voltar
+  }
+  if ($(".form-cad")) return;                         // formulário aberto: não redesenha por baixo
+  clearTimeout(tRedesenho);
+  tRedesenho = setTimeout(() => { if (!editorAtivo && !$(".form-cad")) render(); }, 150);
+}
+/* baixa só a lista aberta (rápido) — é o que garante que ela abre atualizada */
+async function atualizarListaAberta(id) {
+  if (!sb || primeiraCarga) return;
+  const r = await sb.from("req_listas").select("id,dados," + colsVersao()).eq("id", id).maybeSingle();
+  if (r.error || !editorAtivo || editorAtivo.id !== id) return;
+  if (!r.data) {                                       // não existe mais na nuvem
+    const l = listas.find(x => x.id === id);
+    if (l && vistoNuvem.has(id) && !pendentes.has(id)) {
+      listas = listas.filter(x => x !== l); vistoNuvem.delete(id); salvarTudo();
+      refletirSinc(new Set(), new Set([id]));
+    }
+    return;
+  }
+  if (aplicarListaRemota(r.data.dados, r.data)) { salvarTudo(); refletirSinc(new Set([id]), new Set()); }
+}
+
+/* ---------- tempo real: o banco avisa cada navegador aberto ---------- */
+let canalTempoReal = null, tCadastros = null;
+function ligarTempoReal() {
+  if (!sb || canalTempoReal || !sb.channel) return;
+  const conferirLogo = () => { clearTimeout(tCadastros); tCadastros = setTimeout(() => sincronizar(true), 400); };
+  canalTempoReal = sb.channel("rq-dados")
+    .on("postgres_changes", { event: "*", schema: "public", table: "req_listas" }, (p) => {
+      if (primeiraCarga) return;
+      if (p.eventType === "DELETE") {
+        const id = p.old && p.old.id, l = listas.find(x => x.id === id);
+        if (!l || pendentes.has(id)) return;                          // tenho alteração por enviar: a próxima gravação recria
+        listas = listas.filter(x => x !== l); vistoNuvem.delete(id); salvarTudo();
+        refletirSinc(new Set(), new Set([id]));
+        return;
+      }
+      const row = p.new;
+      if (!row || !row.dados || typeof row.dados !== "object") { conferirLogo(); return; }    // aviso sem conteúdo: busca
+      if (aplicarListaRemota(row.dados, row)) { salvarTudo(); refletirSinc(new Set([row.id]), new Set()); }
+    })
+    .on("postgres_changes", { event: "*", schema: "public", table: "req_projetos" }, conferirLogo)
+    .on("postgres_changes", { event: "*", schema: "public", table: "req_pessoas" }, conferirLogo)
+    .on("postgres_changes", { event: "*", schema: "public", table: "req_setores" }, conferirLogo)
+    .on("postgres_changes", { event: "*", schema: "public", table: "req_precos" }, (p) => {
+      if (p.eventType === "DELETE" || !p.new || typeof p.new.chave !== "string") return;
+      precos[p.new.chave] = { preco: +p.new.preco || 0, em: comoTexto(p.new.em, 20) };
+      LS.gravar("rq.precos", precos);
+    })
+    .subscribe((estado) => {
+      const antes = canalLigado;
+      canalLigado = estado === "SUBSCRIBED";
+      if (canalLigado && !antes && !primeiraCarga) sincronizar(true);   // reconectou: confere o que passou enquanto estava fora
+      mostrarSinc();
+    });
+}
+/* conferência periódica (rede de segurança do tempo real) e ao voltar para a aba */
+function ligarSincronia() {
+  if (!sb) return;
+  ligarTempoReal();
+  const seVelha = (ms) => { if (!document.hidden && navigator.onLine !== false && Date.now() - ultimaSinc > ms) sincronizar(); };
+  setInterval(() => seVelha(aoVivo() ? 120000 : 30000), 10000);
+  document.addEventListener("visibilitychange", () => seVelha(5000));
+  window.addEventListener("focus", () => seVelha(5000));
+  window.addEventListener("online", () => { semConexao = false; sincronizar(true); });
+  window.addEventListener("offline", () => { semConexao = true; mostrarSinc(); });
+  const el = $("#status-sinc");
+  if (el) el.onclick = async () => { el.textContent = "● conferindo…"; toast(await sincronizar(true) ? "Tudo conferido com a nuvem." : "Sem conexão com a nuvem agora."); };
 }
 
 const chavePreco = (item) => item.codigo && item.codigo !== "S/ CÓD." ? "C:" + item.codigo : "D:" + norm(item.descricao);
@@ -376,7 +786,12 @@ function tempoDe(reg) {
   return isNaN(t) ? 0 : t;
 }
 
+let bancoCarregando = false;                  // enquanto sincroniza, não se importa planilha por cima
 async function carregarBanco() {
+  bancoCarregando = true;
+  try { await carregarBancoAgora(); } finally { bancoCarregando = false; }
+}
+async function carregarBancoAgora() {
   const st = $("#status-banco");
   const mostrar = (reg, origem) => {
     indexarBanco(reg.itens);
@@ -394,12 +809,12 @@ async function carregarBanco() {
       try {
         const mapa = new Map((local && local.itens || []).map(i => [String(i[0]), i]));
         const desde = (local && local.sync) || null;
-        let marco = desde, baixados = 0, pagina = 0;
+        let marco = desde, baixados = 0;
         for (;;) {
           let q = sb.from("req_itens")
             .select("codigo,descricao,un,ativo,atualizado_em")
-            .order("atualizado_em", { ascending: true })
-            .range(pagina * 1000, pagina * 1000 + 999);
+            .order("atualizado_em", { ascending: true }).order("codigo", { ascending: true })   // 2ª chave: páginas sem repetir nem pular
+            .range(baixados, baixados + 999);
           if (desde) q = q.gt("atualizado_em", desde);
           const { data, error } = await q;
           if (error) throw new Error(error.message);
@@ -412,8 +827,7 @@ async function carregarBanco() {
             st.textContent = `banco: baixando da nuvem… ${baixados.toLocaleString("pt-BR")} itens`;
             await new Promise(r => setTimeout(r, 0));
           }
-          if (!data || data.length < 1000) break;
-          pagina++;
+          if (!data || !data.length) break;            // só para quando vier vazio (o servidor pode limitar a menos de 1000)
         }
         const reg = { v: 2, em: new Date().toISOString(), sync: marco, itens: [...mapa.values()] };
         if (reg.itens.length) {
@@ -461,6 +875,7 @@ async function carregarBanco() {
 async function importarArquivoBanco(arquivo) {
   const prog = $("#progresso-banco");
   prog.hidden = false;
+  if (bancoCarregando) throw new Error("o banco de itens ainda está sincronizando com a nuvem. Aguarde terminar (indicador no topo) e tente de novo.");
   prog.textContent = "Lendo arquivo… (o de 19 MB leva alguns segundos)";
   await new Promise(r => setTimeout(r, 30)); // deixa a UI respirar
 
@@ -470,6 +885,7 @@ async function importarArquivoBanco(arquivo) {
     const j = JSON.parse(await arquivo.text());
     novos = (j.itens || j).map(([c, d, u, a]) => [String(c), String(d), String(u || "UN"), a === 0 ? 0 : 1]);
   } else {
+    if (!window.XLSX) throw new Error("a biblioteca de planilhas não carregou. Recarregue a página (Ctrl+F5) e tente de novo.");
     const buf = await arquivo.arrayBuffer();
     prog.textContent = "Interpretando planilha…";
     await new Promise(r => setTimeout(r, 30));
@@ -548,6 +964,12 @@ async function importarArquivoBanco(arquivo) {
     }
   }
 
+  /* remoção em massa pede confirmação explícita (arquivo errado ou filtro de grupos trocado não esvazia o banco de todos) */
+  if (removidos.length && !confirm(`Esta carga vai REMOVER ${removidos.length.toLocaleString("pt-BR")} de ${(removidos.length + anterior.size).toLocaleString("pt-BR")} itens do banco`
+      + (sb ? " — para toda a equipe" : "") + ` (não constam no arquivo ou ficaram fora dos grupos escolhidos).\n\nContinuar?`)) {
+    prog.textContent = "Importação cancelada. Nada foi alterado.";
+    return;
+  }
   const itens = [...anterior.values()];
   prog.textContent = "Salvando no navegador…";
   const agora = new Date().toISOString();
@@ -724,7 +1146,7 @@ function buscar(consulta, ignorarEspacos, limite = 60) {
 /* ---------------- modelos de dados ---------------- */
 function novaLista(titulo, projetoId, tipo) {
   const U = UNI();
-  const eu = (usuarioAtual && usuarioAtual.nome) || U.padrao.solicitante;
+  const eu = (usuarioAtual && usuarioAtual.nome) || nomeDoCadastro(U.padrao.solicitante);
   return {
     id: uid(), tipo: tipo || "RM",                    // RM = requisição de material · MM = cadastro mín/máx
     unidade: UN,                                      // UIS3 | UIS — define quem enxerga a lista
@@ -870,8 +1292,9 @@ function registrarLog(l, mudancas) {
   const agora = new Date().toISOString(), por = quemSou();
   const ult = antes[antes.length - 1];
   const marco = mudancas.some(m => m.k === "f:status");      // concluir/reabrir: sempre entrada própria
-  let novo;
+  let novo, juntou = false;
   if (!marco && ult && !ult.marco && ult.por === por && (Date.parse(agora) - Date.parse(ult.em)) < LOG_JUNTAR_MIN * 60000) {
+    juntou = true;
     novo = antes.slice(0, -1).concat([{ em: agora, por, inicio: ult.inicio || ult.em, mudancas: juntarMudancas(ult.mudancas || [], mudancas, l) }]);
   } else {
     const e = { em: agora, por, mudancas: consolidarIncluidos(mudancas, l).slice(0, LOG_MUDANCAS_MAX) };
@@ -879,7 +1302,13 @@ function registrarLog(l, mudancas) {
     novo = antes.concat([e]);
   }
   l.log = novo.slice(-LOG_MAX);
-  return () => { l.log = antes; };
+  /* desfazer (a gravação falhou): tira só a MINHA entrada — o histórico pode ter recebido entradas dos colegas nesse meio-tempo */
+  const minha = novo[novo.length - 1], juntada = juntou ? ult : null;
+  return () => {
+    const i = (l.log || []).indexOf(minha);
+    if (i < 0) return;
+    if (juntada) l.log.splice(i, 1, juntada); else l.log.splice(i, 1);
+  };
 }
 function htmlMudanca(m) {
   if (m.k.startsWith("+:")) return `<span class="lg-add">+ incluído</span> ${esc(m.para)}`;
@@ -925,9 +1354,21 @@ function marcarSetor(el) {
 /* ---------------- roteamento ---------------- */
 window.addEventListener("hashchange", render);
 function render() {
+  try { desenharTela(); }
+  catch (e) {
+    console.error("tela:", e);
+    const app = $("#app");
+    app.innerHTML = `<div class="vazio" style="margin:30px auto;max-width:560px">Não consegui montar esta tela.<br>
+      <span style="font-size:12px">${esc(e && e.message)}</span><br><br>
+      <a class="btn" href="#/">Voltar ao início</a> <button class="btn sec" id="btn-recarregar">Recarregar a página</button></div>`;
+    const b = $("#btn-recarregar"); if (b) b.onclick = () => location.reload();
+  }
+}
+function desenharTela() {
   const h = location.hash || "#/";
   const app = $("#app");
   sairDoEditor();                                   // salva pendências do editor anterior
+  if (sb && !primeiraCarga && Date.now() - ultimaSinc > 8000) sincronizar();   // tela nova, dados frescos
   app.onclick = null; app.onchange = null;          // cada tela liga os próprios eventos
   aplicarUnidade();                                 // UIS ou UIS 3 (URL / login)
   document.body.classList.toggle("pg-editor", h.startsWith("#/lista/"));
@@ -938,6 +1379,13 @@ function render() {
   else if (h === "#/cadastros")        telaCadastros(app);
   else if (h === "#/arquivados")       telaArquivados(app);
   else telaInicio(app);
+}
+
+/* registro que ainda não está neste navegador (link direto, 1º acesso): espera a nuvem responder antes de desistir */
+function aguardarNuvem(app) {
+  if (!sb || !primeiraCarga || semConexao) return false;
+  app.innerHTML = `<div class="vazio" id="aguardando-nuvem" style="margin:40px auto;max-width:420px">Carregando da nuvem…</div>`;
+  return true;                                       // a 1ª carga redesenha a tela ao terminar
 }
 
 /* ============================================================
@@ -975,15 +1423,15 @@ function telaInicio(app) {
     const proj = projetos.find(p => p.id === l.projetoId);
     const ult = ultimaEdicao(l);
     return `<div class="cartao ${l.status === "concluida" ? "concluida" : ""}">
-      <h3><span class="etiqueta tipo">${l.tipo === "MM" ? "MM" : "RM"}</span> <a href="#/lista/${l.id}">${esc(l.titulo)}</a></h3>
+      <h3><span class="etiqueta tipo">${l.tipo === "MM" ? "MM" : "RM"}</span> <a href="#/lista/${esc(l.id)}">${esc(l.titulo)}</a></h3>
       <div class="sub">${l.itens.length} itens · criada em ${dataBR(l.criadoEm)}${l.autor ? ` · por ${esc(l.autor)}` : ""}${proj ? ` · <span class="etiqueta">${esc(proj.nome)}</span>` : ""}${l.status === "concluida" ? ' · <span class="etiqueta ok">✔ concluída</span>' : ""}</div>
       ${ult ? `<div class="sub ult" title="Última edição salva">✎ ${esc(dataHoraBR(ult.em))} · ${esc(ult.por)}</div>` : ""}
       <div class="rodape">
         <span class="valor">${dinheiro(totalDa(l))}</span>
         <span class="espacador"></span>
-        <a class="btn mini" href="#/lista/${l.id}">Abrir</a>
-        <button class="btn mini sec" data-duplicar="${l.id}">Duplicar</button>
-        <button class="btn mini perigo" data-excluir-lista="${l.id}">Excluir</button>
+        <a class="btn mini" href="#/lista/${esc(l.id)}">Abrir</a>
+        <button class="btn mini sec" data-duplicar="${esc(l.id)}">Duplicar</button>
+        <button class="btn mini perigo" data-excluir-lista="${esc(l.id)}">Excluir</button>
       </div>
     </div>`;
   };
@@ -991,12 +1439,12 @@ function telaInicio(app) {
     const ls = listas.filter(l => l.projetoId === p.id);
     const tot = ls.reduce((s, l) => s + totalDa(l), 0);
     return `<div class="cartao projeto ${p.status === "arquivado" ? "concluida" : ""}">
-      <h3><a href="#/projeto/${p.id}">${esc(p.nome)}</a></h3>
+      <h3><a href="#/projeto/${esc(p.id)}">${esc(p.nome)}</a></h3>
       <div class="sub">${ls.length} lista(s)${p.autor ? ` · por ${esc(p.autor)}` : ""}${p.status === "arquivado" ? ' · <span class="etiqueta ok">📦 arquivado</span>' : ""}</div>
       <div class="rodape"><span class="valor">${dinheiro(tot)}</span><span class="espacador"></span>
-        <a class="btn mini sec" href="#/projeto/${p.id}">Resumo</a>
-        <button class="btn mini sec" data-arquivar-projeto="${p.id}">${p.status === "arquivado" ? "Reativar" : "Arquivar"}</button>
-        <button class="btn mini perigo" data-excluir-projeto="${p.id}">Excluir</button></div>
+        <a class="btn mini sec" href="#/projeto/${esc(p.id)}">Resumo</a>
+        <button class="btn mini sec" data-arquivar-projeto="${esc(p.id)}">${p.status === "arquivado" ? "Reativar" : "Arquivar"}</button>
+        <button class="btn mini perigo" data-excluir-projeto="${esc(p.id)}">Excluir</button></div>
     </div>`;
   };
 
@@ -1106,7 +1554,7 @@ function telaInicio(app) {
    ============================================================ */
 function telaProjeto(app, id) {
   const p = projetos.find(x => x.id === id);
-  if (!p) { location.hash = "#/"; return; }
+  if (!p) { if (!aguardarNuvem(app)) location.hash = "#/"; return; }
   if (!garantirUnidade(unidadeDoRegistro(p))) return;
   const ls = listas.filter(l => l.projetoId === id);
   const total = ls.reduce((s, l) => s + totalDa(l), 0);
@@ -1127,7 +1575,7 @@ function telaProjeto(app, id) {
       <h1>Projeto: ${esc(p.nome)}</h1><span class="espacador"></span>
       <button class="btn sec" id="btn-renomear">Renomear</button>
       <button class="btn sec" id="btn-arquivar">${p.status === "arquivado" ? "Reativar projeto" : "📦 Arquivar projeto"}</button>
-      <a class="btn" href="#/" onclick="return criarListaNoProjeto('${p.id}')">+ Lista neste projeto</a>
+      <button class="btn" id="btn-lista-projeto">+ Lista neste projeto</button>
     </div>
     <div class="resumo-blocos">
       <div class="resumo-num"><div class="rot">Listas</div><div class="val">${ls.length}</div></div>
@@ -1140,7 +1588,7 @@ function telaProjeto(app, id) {
         <td>${l.status === "concluida" ? '<span class="etiqueta ok">✔ concluída</span>' : '<span class="etiqueta">em andamento</span>'}</td>
         <td>${l.itens.length}</td><td style="font-size:12px;color:var(--cinza)">${u ? `${esc(dataHoraBR(u.em))} · ${esc(u.por)}` : "—"}</td>
         <td class="num">${dinheiro(totalDa(l))}</td>
-        <td><a class="btn mini sec" href="#/lista/${l.id}">Abrir</a></td></tr>`; }).join("") || `<tr><td colspan="6">Nenhuma lista vinculada.</td></tr>`}
+        <td><a class="btn mini sec" href="#/lista/${esc(l.id)}">Abrir</a></td></tr>`; }).join("") || `<tr><td colspan="6">Nenhuma lista vinculada.</td></tr>`}
     </tbody></table>
     <div class="secao-titulo">Materiais consolidados (todas as listas)</div>
     <table class="app"><thead><tr><th>Código</th><th>Descrição</th><th>Un</th><th class="num">Qtd. total</th><th class="num">Valor</th></tr></thead><tbody>
@@ -1156,7 +1604,8 @@ function telaProjeto(app, id) {
     p.status = p.status === "arquivado" ? "andamento" : "arquivado";
     salvarTudo(); nuvemSalvarProjeto(p); render();
   };
-  window.criarListaNoProjeto = (pid) => {
+  $("#btn-lista-projeto").onclick = () => {
+    const pid = p.id;
     const t = prompt("Título da lista:", "");
     if (t === null) return false;
     const l = prepararAssinaturas(novaLista(t.trim() || "Nova requisição", pid));
@@ -1176,11 +1625,11 @@ function telaArquivados(app) {
     const ls = listas.filter(l => l.projetoId === p.id);
     const tot = ls.reduce((s, l) => s + totalDa(l), 0);
     return `<div class="cartao projeto concluida">
-      <h3><a href="#/projeto/${p.id}">${esc(p.nome)}</a></h3>
+      <h3><a href="#/projeto/${esc(p.id)}">${esc(p.nome)}</a></h3>
       <div class="sub">${ls.length} lista(s)${p.autor ? ` · por ${esc(p.autor)}` : ""}</div>
       <div class="rodape"><span class="valor">${dinheiro(tot)}</span><span class="espacador"></span>
-        <a class="btn mini sec" href="#/projeto/${p.id}">Resumo</a>
-        <button class="btn mini" data-reativar="${p.id}">Reativar</button></div>
+        <a class="btn mini sec" href="#/projeto/${esc(p.id)}">Resumo</a>
+        <button class="btn mini" data-reativar="${esc(p.id)}">Reativar</button></div>
     </div>`;
   };
   app.innerHTML = `
@@ -1345,7 +1794,26 @@ function telaCadastros(app) {
     if (d.editarPessoa) {
       const p = pessoas.find(x => x.id === d.editarPessoa);
       const novo = await formPessoa(p); if (!novo) return;
-      Object.assign(p, novo); salvarCadastros(); nuvemSalvarPessoa(p); deduzirUsuario(); avisarSeSaiu(p.nome, p.unidade); render();
+      const antigo = p.nome;
+      Object.assign(p, novo); salvarCadastros(); nuvemSalvarPessoa(p); deduzirUsuario(); avisarSeSaiu(p.nome, p.unidade);
+      if (antigo !== p.nome) {                          // nome novo vale também nas listas em aberto
+        let n = 0;
+        for (const l of listas) {
+          if (l.status === "concluida") continue;           // documento emitido fica como está
+          const antes = JSON.stringify([l.solicitante, l.autor, l.assinaturas]);
+          if (l.solicitante === antigo) l.solicitante = p.nome;
+          if (l.autor === antigo) l.autor = p.nome;
+          l.assinaturas = (l.assinaturas || []).map(a => a === antigo ? p.nome : a);
+          if (JSON.stringify([l.solicitante, l.autor, l.assinaturas]) !== antes) {
+            registrarLog(l, [{ k: "f:renomeado", t: "Nome atualizado pelo cadastro", de: antigo, para: p.nome }]);
+            nuvemSalvarLista(l); n++;
+          }
+        }
+        projetos.forEach(pr => { if (pr.autor === antigo) { pr.autor = p.nome; nuvemSalvarProjeto(pr); } });
+        salvarTudo();
+        if (n) toast(`Nome atualizado em ${n} lista(s) em aberto.`);
+      }
+      render();
     }
     if (d.excluirPessoa) {
       const p = pessoas.find(x => x.id === d.excluirPessoa);
@@ -1390,7 +1858,7 @@ function telaCadastros(app) {
    ============================================================ */
 function telaEditor(app, id) {
   const L = listas.find(x => x.id === id);
-  if (!L) { location.hash = "#/"; return; }
+  if (!L) { if (!aguardarNuvem(app)) location.hash = "#/"; return; }
   if (!garantirUnidade(unidadeDoRegistro(L))) return;   // lista de outra unidade
   const UL = unidadeDoRegistro(L);
   if (!L.tipo) L.tipo = "RM";
@@ -1404,8 +1872,13 @@ function telaEditor(app, id) {
   const setoresNum = setoresUN(UL).filter(s => setorValido(s.nome))
     .sort((a, b) => a.nome.localeCompare(b.nome, "pt-BR", { numeric: true }));
   /* assinantes possíveis: pessoas da unidade + comuns (e quem já estiver na folha) */
-  const opcoesAss = (sel) => [...new Set([...pessoasUN(UL).map(p => p.nome), ...(sel ? [sel] : [])])]
-    .map(n => `<option ${n === sel ? "selected" : ""}>${esc(n)}</option>`).join("");
+  const opcoesAss = (sel) => {
+    const nomes = pessoasUN(UL).map(p => p.nome);
+    const fora = sel && !noCadastro(sel)
+      ? `<option value="${esc(sel)}" selected disabled>⚠ ${esc(sel)} — fora do cadastro</option>` : "";
+    return fora + [...new Set(nomes.concat(sel && noCadastro(sel) ? [sel] : []))]
+      .map(n => `<option value="${esc(n)}" ${n === sel ? "selected" : ""}>${esc(n)}</option>`).join("");
+  };
 
   app.innerHTML = `
   <div class="ed">
@@ -1415,7 +1888,7 @@ function telaEditor(app, id) {
       <select id="ed-projeto" title="Projeto vinculado">
         <option value="">— sem projeto —</option>
         ${projetosUN(UL).filter(p => p.status !== "arquivado" || p.id === L.projetoId)
-          .map(p => `<option value="${p.id}" ${p.id === L.projetoId ? "selected" : ""}>${esc(p.nome)}${p.status === "arquivado" ? " (arquivado)" : ""}</option>`).join("")}
+          .map(p => `<option value="${esc(p.id)}" ${p.id === L.projetoId ? "selected" : ""}>${esc(p.nome)}${p.status === "arquivado" ? " (arquivado)" : ""}</option>`).join("")}
       </select>
       <label class="ed-rot" title="Quem criou/responde por esta lista">Autor
         <select id="ed-autor">
@@ -1492,7 +1965,8 @@ function telaEditor(app, id) {
       </section>
     </div>
   </div>
-  <datalist id="dl-setores">${setoresNum.map(s => `<option value="${esc(s.nome)}"></option>`).join("")}</datalist>`;
+  <datalist id="dl-setores">${setoresNum.map(s => `<option value="${esc(s.nome)}"></option>`).join("")}</datalist>
+  <datalist id="dl-pessoas">${pessoasUN(UL).map(p => `<option value="${esc(p.nome)}"></option>`).join("")}</datalist>`;
 
   const chip = $("#ed-salvo"), elUltima = $("#ed-ultima"), elHist = $("#historico");
   const corpo = $(".ed-corpo");
@@ -1508,6 +1982,7 @@ function telaEditor(app, id) {
   const TXT_SALVO = { salvo: "✓ Salvo", pendente: "● Não salvo", salvando: "Salvando…", erro: "⚠ Falha ao salvar — tentar de novo" };
   function marcar(estado) { chip.textContent = TXT_SALVO[estado]; chip.dataset.estado = estado; }
   function salvar() {
+    if (sb) marcarPendente(L.id, true);   // desde já "por enviar": se a aba fechar agora, sobe na próxima vez
     salvarTudo();                    // rascunho local imediato
     marcar("pendente");
     clearTimeout(tNuvem);
@@ -1521,17 +1996,53 @@ function telaEditor(app, id) {
   async function efetivar() {
     if (!base) return true;
     const mud = diffLista(base, L);
-    if (!mud.length) { salvarTudo(); if (!tNuvem) marcar("salvo"); return true; }
+    const faltaSubir = !!sb && pendentes.has(L.id);    // algo meu ainda não está na nuvem
+    if (!mud.length && !faltaSubir) { salvarTudo(); if (!tNuvem) marcar("salvo"); return true; }
     marcar("salvando");
     const snap = fotografar();
-    const desfazer = registrarLog(L, mud);
+    const desfazer = mud.length ? registrarLog(L, mud) : () => {};
     salvarTudo();
     const ok = await nuvemSalvarLista(L);
+    if (!base) return true;                            // a lista saiu de cena enquanto gravava
     if (!ok) { desfazer(); salvarTudo(); marcar("erro"); return false; }
-    base = snap;
+    if (ok === "mesclado") {                           // alguém gravou antes: as duas edições foram juntadas
+      redesenharTudo(); base = daNuvem(); salvarTudo();
+      toast("Outra pessoa também editou esta requisição — juntei as duas alterações.");
+    } else base = snap;
     if (!tNuvem) marcar(diffLista(base, L).length ? "pendente" : "salvo");
     mostrarUltima(); desenharHistorico();
     return true;
+  }
+  /* a lista como está na nuvem (referência do que é alteração minha) */
+  function daNuvem() {
+    const v = vistoNuvem.get(L.id);
+    if (!v) return fotografar();
+    const c = JSON.parse(v.json); delete c.log;
+    /* assinaturas automáticas são calculadas por esta tela (não são edição de ninguém): não contam como diferença */
+    if (!L.assinaturasManuais && !c.assinaturasManuais) c.assinaturas = (L.assinaturas || []).slice();
+    return c;
+  }
+  function redesenharTudo() {
+    const foco = document.activeElement;
+    for (const [sel, campo] of [["#ed-titulo", "titulo"], ["#ed-projeto", "projetoId"], ["#ed-autor", "autor"], ["#ed-anotacoes", "anotacoes"]]) {
+      const el = $(sel); if (el && el !== foco && el.value !== (L[campo] || "")) el.value = L[campo] || "";
+    }
+    desenharFolha(); aplicarTrava(); mostrarUltima(); desenharHistorico();
+  }
+  /* chegou da nuvem uma versão mais nova desta lista (o conteúdo de L já foi atualizado no lugar) */
+  let regravacoes = [];                // trava de segurança: regravações automáticas recentes
+  function recarregar() {
+    if (!base) return;
+    redesenharTudo();
+    base = daNuvem();
+    const minhas = diffLista(base, L).length > 0;
+    if (minhas && !tNuvem) {
+      /* tenho alterações que ainda não subiram: regrava — mas nunca em ciranda com outro navegador */
+      regravacoes = regravacoes.filter(t => Date.now() - t < 60000);
+      if (regravacoes.length < 3) { regravacoes.push(Date.now()); salvar(); } else marcar("pendente");
+    } else if (!tNuvem) marcar("salvo");
+    const u = ultimaEdicao(L);
+    toast(u && u.por && u.por !== quemSou() ? `Atualizada agora — alteração de ${u.por}` : "Requisição atualizada com a versão mais recente.");
   }
   function mostrarUltima() {
     const u = ultimaEdicao(L);
@@ -1833,6 +2344,7 @@ function telaEditor(app, id) {
 
   /* ---------- navegação por setas entre os campos da folha ---------- */
   const COLUNAS_NAV = ["qtd", "preco", "min", "max", "just"];
+  let itensDesenhados = [];
   $("#folha").parentElement.addEventListener("keydown", (e) => {
     if (e.key !== "ArrowUp" && e.key !== "ArrowDown" && e.key !== "Enter") return;
     const t = e.target;
@@ -1861,6 +2373,8 @@ function telaEditor(app, id) {
     /* guarda o campo focado para devolver o foco após redesenhar */
     const at = document.activeElement;
     const foco = (at && at.closest && at.closest("#folha") && at.dataset) ? { ...at.dataset } : null;
+    const cursor = (foco && at.tagName !== "SELECT" && at.type !== "button") ? [at.selectionStart, at.selectionEnd] : null;
+    const antes = itensDesenhados;                    // os itens como estavam na tela (a nuvem pode ter mudado a ordem)
 
     $("#folha").classList.toggle("mm", ehMM);
     if (ehMM) folhaMM(); else folhaRM();
@@ -1871,15 +2385,37 @@ function telaEditor(app, id) {
     }
     aplicarZoom();
 
+    const chaves = [...mapaItens(L).keys()];
+    itensDesenhados = L.itens.map((it, n) => ({ it, chave: chaves[n] }));
     if (foco) {
       for (const k of [...COLUNAS_NAV, "l"]) {
         if (foco[k] !== undefined) {
-          const el = $(`#folha [data-${k}="${foco[k]}"]`);
-          if (el) { el.focus(); }
+          let alvo = foco[k];
+          if (k !== "l") {                              // célula de item: segue o MESMO item, esteja onde estiver agora
+            const era = antes[+alvo];
+            alvo = era ? L.itens.indexOf(era.it) : -1;
+            if (alvo < 0 && era) alvo = chaves.indexOf(era.chave);
+            if (alvo < 0) break;
+          }
+          const el = $(`#folha [data-${k}="${alvo}"]`);
+          if (el) {
+            el.focus();
+            if (cursor && cursor[0] != null) try { el.setSelectionRange(Math.min(cursor[0], el.value.length), Math.min(cursor[1], el.value.length)); } catch { /* campo sem cursor */ }
+          }
           break;
         }
       }
     }
+  }
+  /* antes de a nuvem mexer nesta lista: confirma o que está sendo digitado numa célula (senão se perderia ao redesenhar) */
+  function assentar() {
+    const f = document.activeElement;
+    if (!base || !f || !f.closest || !f.closest("#folha") || f.readOnly || f.dataset.l !== undefined) return;
+    if (typeof f.onchange !== "function" || f.tagName === "SELECT" || f.value === f.defaultValue) return;
+    const fim = f.value.length, k = COLUNAS_NAV.find(c => f.dataset[c] !== undefined), n = k && f.dataset[k];
+    f.onchange();
+    const el = k ? $(`#folha [data-${k}="${n}"]`) : null;
+    if (el && document.activeElement === el) try { el.setSelectionRange(el.value.length, el.value.length); } catch { /* idem */ }
   }
 
   /* ===== folha RM: REQUISIÇÃO DE MATERIAL ===== */
@@ -1920,10 +2456,10 @@ function telaEditor(app, id) {
         <col class="cA"><col class="cB"><col class="cC"><col class="cD"><col class="cE"><col class="cF"><col class="cX">
       </colgroup>
       <tr>
-        <td class="d-logo"><img src="logo.png" alt="Lar" onerror="this.outerHTML='<b style=\'font-size:22px;color:#d5203b\'>Lar</b>'"></td>
+        <td class="d-logo"><img src="logo.png" alt="Lar" data-reserva="Lar"></td>
         <td class="d-titulo" colspan="2">REQUISIÇÃO DE MATERIAL</td>
         <td class="d-numero" colspan="2"><span class="rotulo">NÚMERO</span><input data-l="numeroFO" value="${esc(L.numeroFO)}"></td>
-        <td class="d-anexos"><img src="icone_doc.png" alt="" onerror="this.remove()"><img src="icone_pdf.png" alt="" onerror="this.remove()"></td>
+        <td class="d-anexos"><img src="icone_doc.png" alt="" data-some><img src="icone_pdf.png" alt="" data-some></td>
         <td class="d-remover no-print"></td>
       </tr>
       <tr class="d-rot-min">
@@ -2026,7 +2562,7 @@ function telaEditor(app, id) {
     <table class="doc mm-cab">
       <colgroup><col style="width:27.9%"><col style="width:55.2%"><col style="width:16.9%"></colgroup>
       <tr>
-        <td class="d-logo" style="text-align:left"><img src="logo.png" alt="Lar" onerror="this.outerHTML='<b style=\'font-size:22px;color:#d5203b\'>Lar</b>'"></td>
+        <td class="d-logo" style="text-align:left"><img src="logo.png" alt="Lar" data-reserva="Lar"></td>
         <td class="d-titulo" style="font-size:12.5px">RELAÇÃO DE MÍNIMOS E MÁXIMOS PARA COMPRA</td>
         <td style="padding:0">
           <table class="mm-num">
@@ -2131,7 +2667,20 @@ function telaEditor(app, id) {
         L[el.dataset.l] = el.value; salvar();
       };
       if (el.dataset.l === "solicitante") {
-        el.onblur = () => { if (!L.assinaturasManuais) desenharFolha(); };   // 1º visto = solicitante
+        el.setAttribute("list", "dl-pessoas"); el.autocomplete = "off";
+        const marcar = () => {
+          const fora = !!el.value.trim() && !noCadastro(el.value);
+          el.classList.toggle("fora-cadastro", fora);
+          el.title = fora ? "Nome fora do cadastro de pessoas — escolha um nome da lista" : "Solicitante (cadastro de pessoas)";
+        };
+        marcar();
+        el.addEventListener("input", marcar);
+        el.onblur = () => {
+          const certo = nomeDoCadastro(el.value, UL);         // liga ao nome exato do cadastro
+          if (certo && certo !== el.value) { el.value = L.solicitante = certo; salvar(); }
+          marcar();
+          if (!L.assinaturasManuais) desenharFolha();          // 1º visto = solicitante
+        };
       }
     });
     $$("#folha [data-qtd]").forEach(el => {
@@ -2185,12 +2734,34 @@ function telaEditor(app, id) {
 
   desenharFolha();
   base = fotografar();                 // referência do log: a lista como foi aberta
+  if (sb && pendentes.has(L.id)) {     // ficou alteração por enviar: a referência é a versão da nuvem de onde ela partiu
+    const b = baseDe(L.id, vistoNuvem.get(L.id));
+    if (b) {
+      delete b.log;
+      if (!L.assinaturasManuais && !b.assinaturasManuais) b.assinaturas = (L.assinaturas || []).slice();
+      base = b;
+    }
+  }
+  if (!travada()) {
+    const trocas = [];
+    const ligar = (v) => { const c = v && !noCadastro(v) ? nomeDoCadastro(v, UL) : ""; if (c) trocas.push(`${v} → ${c}`); return c || v; };
+    L.solicitante = ligar(L.solicitante);
+    L.autor = ligar(L.autor);
+    L.assinaturas = (L.assinaturas || []).map(ligar);
+    if (trocas.length) {
+      desenharFolha(); salvar();
+      toast(`Nome(s) ajustado(s) ao cadastro: ${[...new Set(trocas)].join(" · ")}`);
+    }
+  }
   aplicarTrava();
   marcar("salvo");
   mostrarUltima();
   desenharHistorico();
   selecionarAba(["itens", "notas", "hist"].includes(abaInicial) ? abaInicial : "itens");
-  editorAtivo = { commit, focarBusca };
+  editorAtivo = { id: L.id, commit, focarBusca, recarregar, assentar, base: () => base,
+                  abandonar: () => { base = null; clearTimeout(tNuvem); tNuvem = null; } };
+  if (pendentes.has(L.id)) commit();                  // ficou algo por enviar da última vez
+  atualizarListaAberta(L.id);                         // confere na nuvem se esta é mesmo a última versão
   if (!travada() && !corpo.classList.contains("lat-fechada")) caixa.focus();
 }
 
@@ -2202,13 +2773,16 @@ function telaEditor(app, id) {
    Fonte RQ Sans embutida (= Carlito reduzida; mesmas medidas da Calibri do formulário).
    Bibliotecas e fontes só carregam no 1º clique.
    ============================================================ */
-const LIBS_PDF = {
-  pdflib:  "https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js",
-  fontkit: "https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js",
+const LIBS_PDF = {                             // versão fixa + assinatura: o navegador recusa arquivo adulterado
+  pdflib:  ["https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js",
+            "sha384-weMABwrltA6jWR8DDe9Jp5blk+tZQh7ugpCsF3JwSA53WZM9/14PjS5LAJNHNjAI"],
+  fontkit: ["https://cdn.jsdelivr.net/npm/@pdf-lib/fontkit@1.1.1/dist/fontkit.umd.min.js",
+            "sha384-2p6U+1mmqF10USehFeRiyG2ESG9FwIqN+jxULn5w9jjQIihSn9Pt13dVCn/Hawjn"],
 };
-const carregarScript = (src) => new Promise((ok, erro) => {
+const carregarScript = ([src, assinatura]) => new Promise((ok, erro) => {
   const s = document.createElement("script");
-  s.src = src; s.onload = ok; s.onerror = () => erro(new Error("sem acesso a " + src.split("/npm/")[1]));
+  s.src = src; s.integrity = assinatura; s.crossOrigin = "anonymous";
+  s.onload = ok; s.onerror = () => erro(new Error("sem acesso a " + src.split("/npm/")[1]));
   document.head.appendChild(s);
 });
 let recursosPdf = null;                       // promessa única: bibliotecas + fontes
@@ -2490,7 +3064,7 @@ function montarHistorico() {
         l, idx, mm, codigo: String(i.codigo ?? ""), nome: String(i.descricao ?? ""), un: i.un || "",
         q, qMax: mm ? (+i.qtdMax || 0) : 0, preco, total: q * preco,
         data, t: Date.parse(data) || 0, criada,
-        autor: l.autor || l.solicitante || "", projeto: nomeProj.get(l.projetoId) || "",
+        autor: nomeDoCadastro(l.autor || l.solicitante) || l.autor || l.solicitante || "", projeto: nomeProj.get(l.projetoId) || "",
         n, ns: semEspaco(n), c: norm(i.codigo).replace(/\s/g, ""),
       });
     });
@@ -2776,12 +3350,23 @@ function ligarModais() {
       const j = JSON.parse(await f.text());
       const doArquivo = valorUnidade(j.unidade);
       if (doArquivo && doArquivo !== UN && !confirm(`Este backup é da ${nomeUnidade(doArquivo)}. Importar mesmo assim para a ${UNI().nome}?`)) return;
-      if (!confirm(`Importar backup? Isso SUBSTITUI as listas e projetos da ${UNI().nome} neste navegador (a outra unidade não é afetada). Os preços do arquivo entram na memória de preços.`)) return;
-      const novosP = (j.projetos || []).map(p => ({ ...p, unidade: UN }));
-      const novasL = (j.listas || []).map(l => ({ ...l, unidade: UN }));
-      projetos = projetos.filter(p => unidadeDoRegistro(p) !== UN).concat(novosP);
-      listas = listas.filter(l => unidadeDoRegistro(l) !== UN).concat(novasL);
-      precos = { ...precos, ...(j.precos || {}) };
+      if (!j || typeof j !== "object") throw new Error("conteúdo inesperado");
+      if (!confirm(sb
+        ? `Importar backup? As listas e projetos do arquivo entram na ${UNI().nome} e substituem os de mesmo código. O que não está no arquivo continua como está.`
+        : `Importar backup? Isso SUBSTITUI as listas e projetos da ${UNI().nome} neste navegador (a outra unidade não é afetada). Os preços do arquivo entram na memória de preços.`)) return;
+      const daOutra = (arr) => new Set(arr.filter(x => unidadeDoRegistro(x) !== UN).map(x => x.id));
+      const idsP = daOutra(projetos), idsL = daOutra(listas);
+      const novosP = (Array.isArray(j.projetos) ? j.projetos : []).map(p => normalizarProjeto({ ...p, unidade: UN })).filter(p => p && !idsP.has(p.id));
+      const novasL = (Array.isArray(j.listas) ? j.listas : []).map(l => normalizarLista({ ...l, unidade: UN })).filter(l => l && !idsL.has(l.id));
+      const precosArq = {};
+      for (const [chave, reg] of Object.entries((j.precos && typeof j.precos === "object") ? j.precos : {})) {
+        if (reg && typeof reg === "object" && chave.length <= 420) precosArq[chave] = { preco: comoNumero(reg.preco), em: comoTexto(reg.em, 20) };
+      }
+      j.precos = precosArq;
+      const nP = new Set(novosP.map(p => p.id)), nL = new Set(novasL.map(l => l.id));
+      projetos = projetos.filter(p => sb ? !nP.has(p.id) : unidadeDoRegistro(p) !== UN).concat(novosP);
+      listas = listas.filter(l => sb ? !nL.has(l.id) : unidadeDoRegistro(l) !== UN).concat(novasL);
+      precos = { ...precos, ...precosArq };
       salvarTudo(); render();
       if (sb) {
         for (const p of novosP) await nuvemSalvarProjeto(p);
@@ -2806,27 +3391,76 @@ async function sha256(txt) {
   return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
+/* some com os dados deste navegador (saída da conta, conta sem acesso) */
+function limparDadosLocais() {
+  try {
+    for (const k of Object.keys(localStorage)) {
+      if (/^rq\.(listas|projetos|precos|pessoas|setores|pendentes|base\..+)$/.test(k)) localStorage.removeItem(k);
+    }
+  } catch { /* sem armazenamento: nada a limpar */ }
+}
+async function sair() {
+  if (editorAtivo) await editorAtivo.commit();
+  if (sb && pendentes.size && !confirm(`Há ${pendentes.size} requisição(ões) com alterações que ainda não foram enviadas para a nuvem.\n\nSair mesmo assim? Essas alterações serão perdidas.`)) return;
+  LS.fechado = true;
+  limparDadosLocais();
+  if (sb) { try { await sb.auth.signOut(); } catch { /* sai de qualquer forma */ } }
+  location.reload();
+}
+/* conta que entra mas não está liberada no banco (ver supabase_seguranca.sql): avisa em vez de mostrar tudo vazio */
+async function conferirAcesso() {
+  try {
+    const { data, error } = await sb.rpc("req_meu_acesso");
+    if (error || data !== false) return;               // banco antigo (sem a função) ou acesso liberado
+    LS.fechado = true;
+    limparDadosLocais();
+    sessionStorage.setItem("rq.aviso", "Esta conta não tem acesso liberado. Peça ao responsável para incluir o seu e-mail em Cadastros.");
+    await sb.auth.signOut();
+    location.reload();
+  } catch { /* sem rede: a próxima conferência decide */ }
+}
+
 /* aoAutenticar: chamado quando o usuário está liberado para usar o app */
 async function ligarLogin(aoAutenticar) {
   const tela = $("#tela-login");
+  const aviso = sessionStorage.getItem("rq.aviso");
+  if (aviso) { $("#login-erro").textContent = aviso; sessionStorage.removeItem("rq.aviso"); }
 
   /* ----- modo NUVEM: login multiusuário do Supabase (mesmas contas do painel de gestão) ----- */
   if (sb) {
     $("#email").hidden = false;
+    const liberar = (email) => {
+      emailSessao = email || ""; deduzirUsuario();
+      tela.hidden = true; $("#btn-sair").hidden = false;
+      sb.auth.onAuthStateChange((evento) => {            // sessão encerrada em outra aba ou expirada
+        if (evento !== "SIGNED_OUT") return;
+        if (!pendentes.size) { LS.fechado = true; limparDadosLocais(); }   // o que falta enviar fica guardado para subir no próximo login
+        location.reload();
+      });
+      aoAutenticar();
+      conferirAcesso();
+    };
     const { data: { session } } = await sb.auth.getSession();
-    if (session) { emailSessao = session.user.email || ""; deduzirUsuario(); tela.hidden = true; $("#btn-sair").hidden = false; aoAutenticar(); return; }
+    if (session) { liberar(session.user.email); return; }
+    if (!pendentes.size) {                             // ninguém logado: nada de dados guardados nem em memória (salvo o que falta enviar)
+      limparDadosLocais(); listas = []; projetos = []; precos = {};
+    }
     tela.hidden = false; $("#email").focus();
+    let tentativas = 0, bloqueadoAte = 0;
     $("#form-login").onsubmit = async (e) => {
       e.preventDefault();
+      if (Date.now() < bloqueadoAte) { $("#login-erro").textContent = `Muitas tentativas. Aguarde ${Math.ceil((bloqueadoAte - Date.now()) / 1000)} s.`; return; }
       $("#login-erro").textContent = "Entrando…";
-      const { error } = await sb.auth.signInWithPassword({
-        email: $("#email").value.trim(),
-        password: $("#senha").value,
-      });
-      if (error) { $("#login-erro").textContent = "E-mail ou senha incorretos."; $("#senha").select(); return; }
-      emailSessao = $("#email").value.trim(); deduzirUsuario();
-      tela.hidden = true; $("#btn-sair").hidden = false;
-      aoAutenticar();
+      const email = $("#email").value.trim();
+      const { data, error } = await sb.auth.signInWithPassword({ email, password: $("#senha").value });
+      if (error) {
+        const semRede = error.status === 0 || error.name === "AuthRetryableFetchError" || /failed to fetch|network/i.test(error.message || "");
+        if (semRede) { $("#login-erro").textContent = "Sem conexão com o servidor. Confira a internet e tente de novo."; return; }
+        if (++tentativas >= 5) { bloqueadoAte = Date.now() + 30000; tentativas = 0; }
+        $("#login-erro").textContent = "E-mail ou senha incorretos."; $("#senha").select(); return;
+      }
+      $("#senha").value = "";
+      liberar((data && data.user && data.user.email) || email);
     };
     return;
   }
@@ -2849,12 +3483,46 @@ async function ligarLogin(aoAutenticar) {
   };
 }
 
+/* imagens que não carregam: some com elas (ícones) ou troca pelo nome (logo) — sem código dentro do HTML */
+function tratarImagemQuebrada(im) {
+  if (!im || im.tagName !== "IMG" || !im.isConnected) return;
+  if (im.dataset.reserva) {
+    const b = document.createElement("b");
+    b.textContent = im.dataset.reserva; b.style.cssText = "font-size:22px;color:#d5203b";
+    im.replaceWith(b);
+  } else if (im.dataset.some !== undefined) im.remove();
+}
+document.addEventListener("error", (e) => tratarImagemQuebrada(e.target), true);
+$$("img[data-some], img[data-reserva]").forEach(im => { if (im.complete && !im.naturalWidth) tratarImagemQuebrada(im); });
+
+/* erro inesperado: avisa (uma vez a cada 10 s) em vez de falhar calado */
+let ultimoAvisoErro = 0;
+function avisarErro(e) {
+  console.error("erro inesperado:", e);
+  if (Date.now() - ultimoAvisoErro < 10000) return;
+  ultimoAvisoErro = Date.now();
+  try { toast("⚠ Algo não saiu como esperado. Se o problema continuar, recarregue a página."); } catch { /* sem tela */ }
+}
+window.addEventListener("error", (e) => { if (e.error) avisarErro(e.error); });
+window.addEventListener("unhandledrejection", (e) => avisarErro(e.reason));
+
 /* ---------------- inicialização ---------------- */
 ligarModais();
-render();                                   // abre com o cache local na hora
-$("#btn-sair").onclick = async () => { if (sb) await sb.auth.signOut(); location.reload(); };
-ligarLogin(() => {                          // dados só depois de autenticado
-  render();                                 // já na unidade do usuário logado
-  carregarBanco();
-  carregarNuvem();
-});
+$("#btn-sair").onclick = sair;
+if (CFG.url && CFG.anonKey && !sb) {
+  /* a nuvem está configurada mas a biblioteca de conexão não carregou: NÃO cai no modo local (gravaria só neste computador) */
+  $("#app").innerHTML = `<div class="vazio" style="margin:40px auto;max-width:560px"><strong>Não foi possível conectar à nuvem.</strong><br>
+    A biblioteca de conexão não carregou (rede ou bloqueio do navegador). Nada foi alterado.<br><br>
+    <button class="btn" id="btn-recarregar">Tentar de novo</button></div>`;
+  $("#btn-recarregar").onclick = () => location.reload();
+  $("#status-banco").textContent = "sem conexão";
+} else {
+  if (!sb) render();                          // modo local: abre com o que está neste navegador
+  ligarLogin(() => {                          // na nuvem, nada aparece antes do login
+    render();                                 // cache local na hora, já na unidade do usuário
+    carregarBanco();
+    sincronizar(true);                        // 1ª carga: traz tudo da nuvem e redesenha
+    ligarSincronia();                         // tempo real + conferência periódica
+    mostrarSinc();
+  });
+}
