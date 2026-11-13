@@ -665,6 +665,7 @@ function refletirSinc(mudadas, removidas) {
     return;                                           // outras listas: a tela inicial mostra quando eu voltar
   }
   if ($(".form-cad")) return;                         // formulário aberto: não redesenha por baixo
+  if ($("#bc-tela")) return;                          // busca de códigos: não usa listas ao vivo, não perde o que se digita
   clearTimeout(tRedesenho);
   tRedesenho = setTimeout(() => { if (!editorAtivo && !$(".form-cad")) render(); }, 150);
 }
@@ -744,6 +745,7 @@ const precoLembrado = (item) => (precos[chavePreco(item)] || {}).preco;
 
 /* ---------------- banco de itens (IndexedDB) ---------------- */
 let BANCO = [];        // [{c: código, d: descrição, u: unidade, n: norm, ns: norm sem espaço}]
+let aoMudarBanco = null;   // tela de busca de códigos aberta: avisa quando o banco termina de carregar
 const IDB = {
   abrir() {
     return new Promise((res, rej) => {
@@ -775,6 +777,7 @@ function indexarBanco(itens) {
     const n = norm(d) + " " + String(c);
     return { c: String(c), d: String(d), u: String(u || "UN"), a: a === 0 ? 0 : 1, n, ns: semEspaco(n) };
   });
+  if (typeof aoMudarBanco === "function") setTimeout(aoMudarBanco, 0);   // tela de busca aberta: atualiza
 }
 
 /* aceita "em" antigo em dd/mm/aaaa e novo em ISO */
@@ -1376,6 +1379,7 @@ function desenharTela() {
   if (h.startsWith("#/lista/"))       telaEditor(app, h.slice(8));
   else if (h.startsWith("#/projeto/")) telaProjeto(app, h.slice(10));
   else if (h === "#/historico")        telaHistorico(app);
+  else if (h === "#/codigos")          telaBuscaCodigos(app);
   else if (h === "#/cadastros")        telaCadastros(app);
   else if (h === "#/arquivados")       telaArquivados(app);
   else telaInicio(app);
@@ -3298,6 +3302,506 @@ function telaHistorico(app) {
   const foco = f.nome ? inNome : inCod;
   foco.focus();
   foco.setSelectionRange(foco.value.length, foco.value.length);
+}
+
+/* ============================================================
+   TELA: BUSCA DE CÓDIGOS
+   Procura no BANCO DE ITENS inteiro (não só no que já foi lançado).
+   Critérios: termos em qualquer ordem (com -exclusão e "frase exata"),
+   código (começo, parte ou LISTA colada para conferir), começa com
+   (família), sem as palavras, unidade, uso na unidade, situação e ordem.
+   Busca flexível: ignora espaços/traços, entende abreviações e plurais
+   (DISJUNTORES acha DISJ) e medidas com vírgula ou ponto (2,5 = 2.5).
+   Buscas podem ser salvas neste navegador ("Minhas buscas").
+   ============================================================ */
+const BC_PAGINA = 30;
+const BC_SALVAS = "rq.buscasCodigos";
+const BC_PADRAO = { q: "", cod: "", codModo: "inicio", familia: "", sem: "", un: "", uso: "", sit: "", ordem: "rel",
+                    espacos: true, abrev: true, medidas: true };
+
+/* Abreviações e sinônimos que NÃO são só o começo da palavra.
+   (As que são começo — DISJ, TERM, PARAF, ROLAM, CONTAT… — já funcionam sozinhas.)
+   Para acrescentar: PALAVRA: ["ABREV", …] — maiúsculas, sem acento. Vale nos dois sentidos. */
+const BC_ABREV = {
+  CAIXA: ["CX"], ROLAMENTO: ["ROL"], MOTOR: ["MOT"], TRANSFORMADOR: ["TRAFO", "TR"], INVERSOR: ["INV"],
+  FUSIVEL: ["FUS"], VALVULA: ["VLV"], CILINDRO: ["CIL"], ARRUELA: ["ARR"], CONECTOR: ["CON"],
+  CONTATOR: ["CONT"], LUMINARIA: ["LUM"], RETENTOR: ["RET"], ENGRENAGEM: ["ENG"], REDUCAO: ["RED"],
+  COTOVELO: ["COT", "JOELHO"], JOELHO: ["COTOVELO", "COT"], BUCHA: ["BCH"], CHAVE: ["CH"], TOMADA: ["TOM"],
+  CABECA: ["CAB"], ALUMINIO: ["AL"], POLEGADA: ["POL"], TRIFASICO: ["TRIF", "3F"], MONOFASICO: ["MONOF", "1F"],
+  BIFASICO: ["BIF", "2F"], NIVEL: ["NIV"], VELOCIDADE: ["VEL"], VEDACAO: ["VED"], ACOPLAMENTO: ["ACOP"],
+  ELEMENTO: ["ELEM"], FILTRO: ["FILT", "FTR"], BOMBA: ["BBA"], TRANSMISSOR: ["TX", "TRANSM"], FONTE: ["FT"],
+  PARAFUSO: ["PARAF", "PRF"], PORCA: ["PCA"], GALVANIZADO: ["GALV", "ZINC", "ZINCADO"], INOXIDAVEL: ["INOX"],
+  PNEUMATICO: ["PNEUM", "PN"], HIDRAULICO: ["HIDR", "HID"], ELETRICO: ["ELET", "ELETR"], SOLENOIDE: ["SOL"],
+  LAMPADA: ["LAMP", "LP"], ROLDANA: ["POLIA"], POLIA: ["ROLDANA"], SUPORTE: ["SUP"], DIAMETRO: ["DIAM", "DIA"],
+  COMPRIMENTO: ["COMP"], ESPESSURA: ["ESP"], CAPACITOR: ["CAP"], CONDUTOR: ["COND"], ISOLADOR: ["ISOL"],
+  ABRACADEIRA: ["ABRAC"], ELETRODUTO: ["ELETROD"], RESISTENCIA: ["RESIST", "RES"], MANOMETRO: ["MANOM"],
+  TERMOMETRO: ["TERMOM"], CORREIA: ["CORR"], MANGUEIRA: ["MANG"], PRESSOSTATO: ["PRESS"], TEMPORIZADOR: ["TEMPOR"],
+};
+const BC_ABREV_LISTA = Object.entries(BC_ABREV);
+const BC_REVERSO = new Map();                         // TRAFO → [TRANSFORMADOR]
+for (const [k, v] of BC_ABREV_LISTA) for (const a of v) { if (!BC_REVERSO.has(a)) BC_REVERSO.set(a, []); BC_REVERSO.get(a).push(k); }
+/* palavras curtas comuns que não valem como abreviação (PARA não é PARAFUSO) */
+const BC_PARADAS = new Set(["PARA", "PELO", "PELA", "COMO", "CADA", "ENTRE", "SOBRE", "TIPO", "MODELO", "PECA", "PECAS"]);
+
+
+/* índice por código (refeito só quando o banco muda) */
+let bcMapaFonte = null, bcMapa = new Map();
+function bcPorCodigo() {
+  if (bcMapaFonte !== BANCO) { bcMapa = new Map(BANCO.map(it => [it.c, it])); bcMapaFonte = BANCO; }
+  return bcMapa;
+}
+const bcUn = (it) => norm(it.u).trim() || "—";
+const bcFamilia = (it) => it.fam || (it.fam = (it.n.split(/[^A-Z0-9]+/).find(Boolean) || "—"));
+const bcColl = new Intl.Collator("pt-BR", { numeric: true, sensitivity: "base" });
+
+/* quantas vezes cada código entrou nas requisições da unidade */
+function bcUsoNaUnidade() {
+  const m = new Map();
+  for (const l of listasUN()) {
+    const data = l.data || l.criadoEm || "";
+    for (const i of (l.itens || [])) {
+      const c = String(i.codigo ?? "").trim();
+      if (!c || c === "S/ CÓD.") continue;
+      let u = m.get(c);
+      if (!u) m.set(c, u = { n: 0, req: new Set(), ult: "", nome: i.descricao || "" });
+      u.n++; u.req.add(l.id);
+      if (data > u.ult) { u.ult = data; u.nome = i.descricao || u.nome; }
+    }
+  }
+  return m;
+}
+
+/* campo de termos: palavras, "frases exatas" e -exclusões */
+function bcLerTermos(txt) {
+  const inc = [], exc = [], re = /(-?)"([^"]*)"?|(\S+)/g, s = norm(txt);
+  let m;
+  while ((m = re.exec(s))) {
+    if (m[3] !== undefined) {
+      if (m[3].length > 1 && m[3][0] === "-") exc.push(m[3].slice(1));
+      else if (m[3] !== "-") inc.push(m[3]);
+    } else {
+      const fr = m[2].trim().replace(/\s+/g, " ");
+      if (fr) (m[1] ? exc : inc).push(fr);
+    }
+  }
+  return { inc, exc };
+}
+/* campo de código: um código, ou vários (colados do Excel, separados por espaço, vírgula, ponto e vírgula) */
+function bcCodigos(txt) {
+  const tk = norm(txt).split(/[\s,;|]+/).filter(Boolean);
+  if (tk.length < 2) return tk;
+  const mapa = bcPorCodigo(), vistos = new Set();
+  return tk.filter(t => (mapa.has(t) || /^\d{3,}$/.test(t)) && !vistos.has(t) && vistos.add(t));
+}
+
+/* prepara um termo: variações aceitas (medida, abreviação, sinônimo) */
+function bcPrepTermo(t, f) {
+  const medida = /\d[.,]\d/.test(t);
+  const P = { t, ns: medida ? "" : semEspaco(t), alt: [], tok: [], pref: false };
+  if (f.medidas && medida) P.alt.push(t.replace(/[.,]/g, c => c === "," ? "." : ","));
+  if (medida && !f.medidas) P.ns = semEspaco(t);
+  if (f.abrev && /^[A-Z0-9]{2,}$/.test(t)) {
+    for (const k of (BC_REVERSO.get(t) || [])) P.alt.push(k);                 // TRAFO → TRANSFORMADOR
+    if (/^[A-Z]{4,}$/.test(t)) {
+      P.pref = true;                                                            // PARAFUSOS aceita PARAF, PARAFUSO…
+      for (const [k, v] of BC_ABREV_LISTA)
+        if (k === t || (t.length >= 5 && (k.startsWith(t) || t.startsWith(k)))) P.tok.push(...v);   // CAIXAS → CX
+    }
+  }
+  return P;
+}
+const bcLetraNum = (ch) => ch >= "A" && ch <= "Z" || ch >= "0" && ch <= "9";
+/* custo do encaixe de um termo no item (-1 = não serve): quanto menor, melhor */
+function bcCusto(it, P, f) {
+  const p = it.n.indexOf(P.t);
+  if (p >= 0) return (p === 0 || !bcLetraNum(it.n[p - 1])) ? 0 : 2;
+  for (const a of P.alt) if (it.n.includes(a)) return 3;
+  if (f.espacos && P.ns && it.ns.includes(P.ns)) return 4;
+  if (P.pref || P.tok.length) {
+    const tk = it.tk || (it.tk = it.n.split(/[^A-Z0-9]+/));
+    for (const w of tk) {
+      if (P.tok.includes(w)) return 5;
+      if (P.pref && w.length >= 4 && w.length < P.t.length && P.t.startsWith(w) && !BC_PARADAS.has(w)) return 6;
+    }
+  }
+  return -1;
+}
+/* o trecho que encaixou (para destacar na descrição) */
+function bcTrecho(it, P, f) {
+  if (it.n.includes(P.t)) return P.t;
+  for (const a of P.alt) if (it.n.includes(a)) return a;
+  if (P.pref || P.tok.length) {
+    for (const w of (it.tk || it.n.split(/[^A-Z0-9]+/))) {
+      if (P.tok.includes(w)) return w;
+      if (P.pref && w.length >= 4 && w.length < P.t.length && P.t.startsWith(w) && !BC_PARADAS.has(w)) return w;
+    }
+  }
+  return "";
+}
+
+const bcSemCriterio = (f) => !f.q.trim() && !f.cod.trim() && !f.familia.trim() && !f.sem.trim() && !f.un && !f.uso && !f.sit;
+
+function bcBuscar(f, uso) {
+  const { inc, exc } = bcLerTermos(f.q);
+  const excl = [...exc, ...norm(f.sem).split(/[\s,;]+/).filter(Boolean)];
+  const Ps = inc.map(t => bcPrepTermo(t, f));
+  const codTk = bcCodigos(f.cod);
+  const c1 = codTk.length === 1 ? codTk[0].replace(/\s/g, "") : "";
+  const fam = norm(f.familia).trim();
+  const vazio = bcSemCriterio(f);
+  const base = [];
+  for (let i = 0; i < BANCO.length; i++) {
+    const it = BANCO[i];
+    const u = uso.get(it.c);
+    if (vazio && !u) continue;                        // sem critério: só os já usados na unidade
+    if (c1 && !(f.codModo === "parte" ? it.c.includes(c1) : it.c.startsWith(c1))) continue;
+    if (f.sit === "ativos" && !it.a) continue;
+    if (f.sit === "inativos" && it.a) continue;
+    if (f.uso) {
+      const p = !!precos["C:" + it.c];
+      if (f.uso === "usados" && !u) continue;
+      if (f.uso === "preco" && !p) continue;
+      if (f.uso === "nunca" && (u || p)) continue;
+    }
+    let custo = 0, ok = true;
+    for (const P of Ps) { const k = bcCusto(it, P, f); if (k < 0) { ok = false; break; } custo += k; }
+    if (!ok) continue;
+    if (excl.length && excl.some(t => it.n.includes(t))) continue;
+    const p0 = Ps.length ? Math.max(0, it.n.indexOf(Ps[0].t)) : 0;
+    const s = custo * 10 + Math.min(p0, 40) / 4 + (it.a ? 0 : 500)
+            - (u ? 12 + Math.min(u.n, 10) : 0) - (precos["C:" + it.c] ? 4 : 0) + (c1 ? it.c.length : 0);
+    base.push({ it, s, u });
+  }
+  /* família e unidade: contagens para os chips, cada uma sem o próprio filtro */
+  const fams = new Map(), uns = new Map(), res = [];
+  for (const r of base) {
+    const okF = !fam || r.it.n.startsWith(fam), okU = !f.un || bcUn(r.it) === f.un;
+    if (okU) { const k = bcFamilia(r.it); fams.set(k, (fams.get(k) || 0) + 1); }
+    if (okF) { const k = bcUn(r.it); uns.set(k, (uns.get(k) || 0) + 1); }
+    if (okF && okU) res.push(r);
+  }
+  const usoN = (r) => r.u ? r.u.n : 0;
+  const ordem = vazio && f.ordem === "rel" ? "uso" : f.ordem;
+  const cmp = {
+    uso: (a, b) => usoN(b) - usoN(a) || a.s - b.s,
+    cod: (a, b) => bcColl.compare(a.it.c, b.it.c),
+    desc: (a, b) => bcColl.compare(a.it.d, b.it.d) || bcColl.compare(a.it.c, b.it.c),
+    rel: (a, b) => a.s - b.s || a.it.d.length - b.it.d.length || bcColl.compare(a.it.c, b.it.c),
+  }[ordem] || ((a, b) => a.s - b.s);
+  res.sort(cmp);
+  return { res, fams, uns, Ps, nBase: base.length, vazio };
+}
+
+/* lista de códigos colada: cada código na ordem em que veio, com os que faltam no banco */
+function bcConferir(codTk, uso) {
+  const mapa = bcPorCodigo();
+  return codTk.map(c => { const it = mapa.get(c); return it ? { it, u: uso.get(c) } : { falta: c, u: uso.get(c) }; });
+}
+
+async function copiarTexto(txt) {
+  try { await navigator.clipboard.writeText(txt); return true; } catch { /* sem permissão: tenta o jeito antigo */ }
+  const ta = document.createElement("textarea");
+  ta.value = txt; ta.setAttribute("readonly", ""); ta.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+  document.body.appendChild(ta); ta.select();
+  let ok = false; try { ok = document.execCommand("copy"); } catch { /* nada */ }
+  ta.remove();
+  return ok;
+}
+
+function telaBuscaCodigos(app) {
+  const f = { ...BC_PADRAO };
+  try { Object.assign(f, JSON.parse(sessionStorage.getItem("rq.codigos") || "{}")); } catch { /* padrão */ }
+  let pagina = 1, R = null, linhasVis = [], lista = null;
+  const UNOME = esc(UNI().nome);
+  const movel = window.matchMedia && window.matchMedia("(max-width:900px)").matches;
+  const painelAberto = sessionStorage.getItem("rq.bcPainel");
+
+  app.innerHTML = `<div id="bc-tela">
+    <div class="pagina-titulo">
+      <h1>Busca de códigos</h1><span class="etiqueta tipo">${UNOME}</span>
+      <span class="espacador"></span>
+      <span class="h-total" id="bc-total"></span>
+    </div>
+    <div class="bc-salvas" id="bc-salvas"></div>
+    <div class="h-filtros bc-filtros">
+      <div class="h-campo nome">
+        <label for="bc-q">Descrição</label>
+        <input type="text" id="bc-q" autocomplete="off" spellcheck="false" enterkeyhint="search"
+               placeholder="Termos em qualquer ordem… ex.: disjuntor 3p 32a">
+        <button class="h-limpar" id="bcl-q" title="Limpar (Esc)" hidden>✕</button>
+      </div>
+      <div class="h-campo cod">
+        <label for="bc-cod">Código</label>
+        <input type="text" id="bc-cod" inputmode="numeric" autocomplete="off" spellcheck="false" enterkeyhint="search"
+               placeholder="Ex.: 9524 — ou cole vários">
+        <button class="h-limpar" id="bcl-cod" title="Limpar (Esc)" hidden>✕</button>
+      </div>
+      <div class="bc-dica"><code>-palavra</code> exclui · <code>"frase exata"</code> entre aspas ·
+        cole uma lista de códigos (do Excel) para conferir todos de uma vez</div>
+      <details class="bc-criterios" id="bc-criterios"${painelAberto === "1" || (painelAberto == null && !movel) ? " open" : ""}>
+        <summary>Critérios <span class="bc-nativos" id="bc-nativos"></span></summary>
+        <div class="bc-grade">
+          <label class="bc-crit"><span>Começa com</span>
+            <input type="text" id="bc-familia" autocomplete="off" spellcheck="false" placeholder="ex.: CABO, DISJ, TERMINAL"></label>
+          <label class="bc-crit"><span>Sem as palavras</span>
+            <input type="text" id="bc-sem" autocomplete="off" spellcheck="false" placeholder="ex.: locacao kit"></label>
+          <label class="bc-crit"><span>Unidade de medida</span><select id="bc-un"></select></label>
+          <label class="bc-crit"><span>Uso na ${UNOME}</span><select id="bc-uso">
+            <option value="">Todos os itens do banco</option><option value="usados">Já usados em requisições</option>
+            <option value="preco">Com preço registrado</option><option value="nunca">Nunca usados</option></select></label>
+          <label class="bc-crit"><span>Situação</span><select id="bc-sit">
+            <option value="">Ativos e desativados</option><option value="ativos">Só ativos</option><option value="inativos">Só desativados</option></select></label>
+          <label class="bc-crit"><span>Código digitado</span><select id="bc-codmodo">
+            <option value="inicio">No começo do código</option><option value="parte">Em qualquer parte</option></select></label>
+          <label class="bc-crit"><span>Ordenar por</span><select id="bc-ordem">
+            <option value="rel">Relevância</option><option value="uso">Mais usados</option>
+            <option value="cod">Código</option><option value="desc">Descrição (A–Z)</option></select></label>
+        </div>
+        <div class="bc-flex">
+          <label class="check"><input type="checkbox" id="bc-espacos"> Ignorar espaços e traços <small>4X2,5 = 4 X 2,5</small></label>
+          <label class="check"><input type="checkbox" id="bc-abrev"> Abreviações e plurais <small>disjuntores acha DISJ</small></label>
+          <label class="check"><input type="checkbox" id="bc-medidas"> Vírgula = ponto <small>2,5 = 2.5</small></label>
+          <span class="espacador"></span>
+          <button class="btn sec mini" id="bc-zerar" title="Volta todos os critérios ao padrão">Limpar tudo</button>
+        </div>
+      </details>
+    </div>
+    <div class="h-resumo" id="bc-resumo"></div>
+    <div class="h-rolagem bc-rolagem">
+      <table class="app bc">
+        <thead><tr><th>Código</th><th>Descrição</th><th>Un</th><th class="num">Último preço</th><th>Uso na ${UNOME}</th><th></th></tr></thead>
+        <tbody id="bc-corpo"></tbody>
+      </table>
+    </div>
+    <div class="h-rodape"><span id="bc-conta"></span><button class="btn sec" id="bc-mais" hidden></button>
+      <button class="btn sec" id="bc-copiar-tudo" hidden title="Copia código, descrição e unidade — cola direto no Excel">📋 Copiar resultados</button></div>
+  </div>`;
+
+  const inQ = $("#bc-q"), inCod = $("#bc-cod"), det = $("#bc-criterios");
+  const campos = { familia: "#bc-familia", sem: "#bc-sem", un: "#bc-un", uso: "#bc-uso", sit: "#bc-sit", codModo: "#bc-codmodo", ordem: "#bc-ordem" };
+  const marcas = { espacos: "#bc-espacos", abrev: "#bc-abrev", medidas: "#bc-medidas" };
+
+  function opcoesUnidade() {
+    const cont = new Map();
+    for (const it of BANCO) { const k = bcUn(it); cont.set(k, (cont.get(k) || 0) + 1); }
+    const ord = [...cont].sort((a, b) => b[1] - a[1]).slice(0, 40);
+    if (f.un && !cont.has(f.un)) ord.push([f.un, 0]);
+    $("#bc-un").innerHTML = `<option value="">Todas</option>` + ord.map(([u, n]) => `<option value="${esc(u)}">${esc(u)} (${n.toLocaleString("pt-BR")})</option>`).join("");
+    $("#bc-un").value = f.un;
+  }
+  function preencher() {
+    inQ.value = f.q; inCod.value = f.cod;
+    for (const [k, s] of Object.entries(campos)) $(s).value = f[k];
+    for (const [k, s] of Object.entries(marcas)) $(s).checked = f[k] !== false;
+  }
+  const nAtivos = () => ["familia", "sem"].filter(k => f[k].trim()).length
+    + ["un", "uso", "sit"].filter(k => f[k]).length + (f.codModo !== "inicio") + (f.ordem !== "rel")
+    + ["espacos", "abrev", "medidas"].filter(k => f[k] === false).length;
+
+  /* ---------- minhas buscas (salvas neste navegador) ---------- */
+  const salvas = () => { const s = LS.ler(BC_SALVAS, []); return Array.isArray(s) ? s : []; };
+  function desenharSalvas() {
+    const s = salvas();
+    $("#bc-salvas").innerHTML = (s.length ? `<span class="bc-salvas-rot">Minhas buscas</span>` : "")
+      + s.map((b, i) => `<span class="bc-salva"><button data-salva="${i}" title="Aplicar esta busca">★ ${esc(b.nome)}</button><button class="bc-salva-x" data-apagar="${i}" title="Apagar esta busca salva">✕</button></span>`).join("")
+      + `<button class="bc-salvar" id="bc-salvar" ${bcSemCriterio(f) && !nAtivos() ? "disabled" : ""} title="Guarda os critérios atuais com um nome (neste navegador)">☆ Salvar esta busca</button>`;
+  }
+  $("#bc-salvas").onclick = (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    const s = salvas();
+    if (b.id === "bc-salvar") {
+      const sug = curto(f.q || f.familia || f.cod || "Minha busca", 30);
+      const nome = (prompt("Nome para esta busca:", sug) || "").trim();
+      if (!nome) return;
+      const i = s.findIndex(x => x.nome.toLowerCase() === nome.toLowerCase());
+      const reg = { nome: curto(nome, 40), f: { ...f } };
+      if (i >= 0) s[i] = reg; else s.push(reg);
+      LS.gravar(BC_SALVAS, s.slice(-24));
+      desenharSalvas(); toast(`★ Busca “${reg.nome}” salva.`);
+    } else if (b.dataset.apagar != null) {
+      const x = s[+b.dataset.apagar];
+      if (x && confirm(`Apagar a busca salva “${x.nome}”?`)) { s.splice(+b.dataset.apagar, 1); LS.gravar(BC_SALVAS, s); desenharSalvas(); }
+    } else if (b.dataset.salva != null) {
+      const x = s[+b.dataset.salva]; if (!x) return;
+      Object.assign(f, BC_PADRAO, x.f || {});
+      preencher(); opcoesUnidade();
+      if (nAtivos()) det.open = true;
+      atualizar();
+      toast(`★ ${x.nome}`);
+    }
+  };
+
+  /* ---------- desenho ---------- */
+  const usoHtml = (u) => u
+    ? `<span title="${u.n} lançamento(s) em ${u.req.size} requisição(ões)"><b>${u.req.size}</b> req.${u.ult ? ` · últ. ${esc(dataBR(u.ult))}` : ""}</span>`
+    : `<span class="bc-mudo">—</span>`;
+  const precoHtml = (c) => {
+    const p = precos["C:" + c];
+    return p && p.preco ? `${dinheiro(p.preco)}${p.em ? `<small>${esc(dataBR(p.em))}</small>` : ""}` : `<span class="bc-mudo">—</span>`;
+  };
+  const codHtml = (c, c1) => (c1 && f.codModo !== "parte" && c.startsWith(c1))
+    ? `<mark>${esc(c.slice(0, c1.length))}</mark>${esc(c.slice(c1.length))}`
+    : (c1 && f.codModo === "parte" && c.includes(c1))
+      ? esc(c.slice(0, c.indexOf(c1))) + `<mark>${esc(c1)}</mark>` + esc(c.slice(c.indexOf(c1) + c1.length)) : esc(c);
+  function linha(r, k, c1) {
+    if (r.falta) return `<tr class="bc-falta">
+      <td class="bc-cod"><span class="bc-cod-txt">${esc(r.falta)}</span></td>
+      <td class="bc-desc"><strong>Não encontrado no banco de itens.</strong>${r.u ? `<div class="bc-sub">Já foi lançado em requisições como: ${esc(r.u.nome)}</div>` : ""}</td>
+      <td class="bc-un"></td><td class="bc-preco num">${precoHtml(r.falta)}</td><td class="bc-uso">${usoHtml(r.u)}</td>
+      <td class="bc-acoes">${r.u ? `<button class="btn sec mini" data-hist="${esc(r.falta)}">🕘 Histórico</button>` : ""}</td></tr>`;
+    const it = r.it;
+    const hl = R ? R.Ps.map(P => bcTrecho(it, P, f)).filter(Boolean) : [];
+    return `<tr class="${it.a ? "" : "bc-inativo"}">
+      <td class="bc-cod"><button class="bc-copiar" data-copiar="${k}" title="Copiar o código ${esc(it.c)}">${codHtml(it.c, c1)}<span class="bc-ico" aria-hidden="true">⧉</span></button></td>
+      <td class="bc-desc">${marcarTermos(it.d, hl)}${it.a ? "" : ' <span class="badge-inativo">DESATIVADO</span>'}</td>
+      <td class="bc-un">${esc(it.u)}</td>
+      <td class="bc-preco num">${precoHtml(it.c)}</td>
+      <td class="bc-uso">${usoHtml(r.u)}</td>
+      <td class="bc-acoes">
+        <button class="btn sec mini" data-copiar-desc="${k}" title="Copiar código e descrição">⧉ Cód. + descrição</button>
+        ${r.u ? `<button class="btn sec mini" data-hist="${esc(it.c)}" title="Ver este código no Histórico por item">🕘 Histórico</button>` : ""}
+        <button class="btn sec mini" data-google="${k}" title="Pesquisar a descrição no Google (nova guia)">🔍 Google</button>
+      </td></tr>`;
+  }
+  function desenhar() {
+    const todas = lista || R.res;
+    linhasVis = todas.slice(0, pagina * BC_PAGINA);
+    const c1 = !lista ? (bcCodigos(f.cod)[0] || "") : "";
+    $("#bc-corpo").innerHTML = linhasVis.map((r, k) => linha(r, k, c1)).join("")
+      || `<tr><td colspan="6" class="h-vazio">${!BANCO.length
+          ? "O banco de itens ainda está carregando…"
+          : R && R.vazio
+            ? `Nenhum código usado ainda nas requisições da ${UNOME}. Digite acima para procurar nos itens do banco.`
+            : "Nenhum código encontrado.<br><small>Tente menos termos, confira “Abreviações” e “Ignorar espaços” em Critérios, ou use “Limpar tudo”.</small>"}</td></tr>`;
+    const tot = todas.length;
+    $("#bc-conta").textContent = tot ? `Mostrando ${linhasVis.length} de ${tot.toLocaleString("pt-BR")}` : "";
+    const resta = tot - linhasVis.length;
+    $("#bc-mais").hidden = resta <= 0;
+    $("#bc-mais").textContent = `Mostrar mais ${Math.min(BC_PAGINA, resta)}`;
+    $("#bc-copiar-tudo").hidden = !tot;
+  }
+  function resumo() {
+    if (!BANCO.length) return "Carregando o banco de itens…";
+    if (lista) {
+      const ach = lista.filter(r => !r.falta).length, falta = lista.length - ach;
+      return `Conferência de lista: <strong>${lista.length}</strong> código(s) colado(s) · <strong>${ach}</strong> encontrado(s)`
+        + (falta ? ` · <strong class="bc-alerta">${falta} não encontrado(s)</strong>` : " · todos no banco ✔")
+        + `<br><small>Na conferência de lista, os outros critérios não se aplicam.</small>`;
+    }
+    if (R.vazio) return `Sem critérios: mostrando os <strong>${R.res.length.toLocaleString("pt-BR")}</strong> códigos já usados nas requisições da ${UNOME}, dos mais usados para os menos. `
+      + `Digite acima para procurar nos <strong>${BANCO.length.toLocaleString("pt-BR")}</strong> itens do banco.`;
+    let h = `<strong>${R.res.length.toLocaleString("pt-BR")}</strong> código(s) encontrado(s)`;
+    if (R.res.length !== R.nBase) h += ` de ${R.nBase.toLocaleString("pt-BR")}`;
+    const chips = (rot, mapa, ativo, attr, nomeTodos) => {
+      if (!ativo && mapa.size < 2) return "";
+      const top = [...mapa].sort((a, b) => b[1] - a[1]).slice(0, movel ? 8 : 14);
+      return `<div class="h-chips bc-chips"><span class="bc-chips-rot">${rot}:</span>`
+        + (ativo ? `<button class="h-chip bc-ativo" data-${attr}="" title="Remover este filtro">${esc(ativo)} ✕</button>` : "")
+        + (ativo ? "" : top.map(([k, n]) => `<button class="h-chip" data-${attr}="${esc(k)}">${esc(k)} <b>${n.toLocaleString("pt-BR")}</b></button>`).join(""))
+        + (!ativo && mapa.size > top.length ? `<span class="h-mais-cod">+${mapa.size - top.length}</span>` : "")
+        + (ativo ? "" : `<span class="bc-dica-chip">${nomeTodos}</span>`) + `</div>`;
+    };
+    h += chips("Começa com", R.fams, norm(f.familia).trim(), "familia", "toque para filtrar");
+    h += chips("Unidade", R.uns, f.un, "un", "");
+    return h;
+  }
+  function travas() {
+    $("#bcl-q").hidden = !inQ.value; $("#bcl-cod").hidden = !inCod.value;
+    const n = nAtivos();
+    $("#bc-nativos").textContent = n ? `${n} ativo(s)` : "";
+    const tk = bcCodigos(inCod.value);
+    $("#bc-cod").closest(".h-campo").classList.toggle("bc-lista", tk.length > 1);
+    $("label[for=bc-cod]").textContent = tk.length > 1 ? `Código · lista de ${tk.length}` : "Código";
+  }
+  function atualizar() {
+    travas();
+    const uso = bcUsoNaUnidade();
+    const tk = bcCodigos(f.cod);
+    lista = tk.length > 1 ? bcConferir(tk, uso) : null;
+    R = lista ? { res: [], fams: new Map(), uns: new Map(), Ps: [], nBase: 0, vazio: false } : bcBuscar(f, uso);
+    pagina = 1;
+    $("#bc-total").textContent = BANCO.length ? `${BANCO.length.toLocaleString("pt-BR")} itens no banco` : "banco carregando…";
+    $("#bc-resumo").innerHTML = resumo();
+    desenhar();
+    desenharSalvas();
+    try { sessionStorage.setItem("rq.codigos", JSON.stringify(f)); } catch { /* sem sessão */ }
+  }
+
+  /* ---------- eventos ---------- */
+  let timer = null;
+  const depois = () => { clearTimeout(timer); timer = setTimeout(atualizar, 140); };
+  inQ.oninput = () => { f.q = inQ.value; travas(); depois(); };
+  inCod.oninput = () => { f.cod = inCod.value; travas(); depois(); };
+  /* lista colada do Excel: quebras de linha e tabulações viram espaço (o campo apagaria as quebras) */
+  inCod.addEventListener("paste", (e) => {
+    const t = e.clipboardData && e.clipboardData.getData("text");
+    if (!t || !/[\r\n\t]/.test(t.trim())) return;
+    e.preventDefault();
+    inCod.setRangeText(t.split(/[\r\n\t]+/).map(s => s.trim()).filter(Boolean).join(" "), inCod.selectionStart, inCod.selectionEnd, "end");
+    inCod.dispatchEvent(new Event("input"));
+  });
+  for (const el of [inQ, inCod]) el.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && el.value) { e.preventDefault(); el.value = ""; el.dispatchEvent(new Event("input")); }
+    if (e.key === "Enter") { e.preventDefault(); clearTimeout(timer); atualizar(); if (movel) el.blur(); }   // celular: fecha o teclado
+  });
+  $("#bcl-q").onclick = () => { inQ.value = ""; f.q = ""; atualizar(); inQ.focus(); };
+  $("#bcl-cod").onclick = () => { inCod.value = ""; f.cod = ""; atualizar(); inCod.focus(); };
+  for (const [k, s] of Object.entries(campos)) {
+    const el = $(s);
+    if (el.tagName === "SELECT") el.onchange = () => { f[k] = el.value; atualizar(); };
+    else el.oninput = () => { f[k] = el.value; travas(); depois(); };
+  }
+  for (const [k, s] of Object.entries(marcas)) $(s).onchange = (e) => { f[k] = e.target.checked; atualizar(); };
+  $("#bc-zerar").onclick = () => { Object.assign(f, BC_PADRAO); preencher(); opcoesUnidade(); atualizar(); inQ.focus(); };
+  det.addEventListener("toggle", () => { try { sessionStorage.setItem("rq.bcPainel", det.open ? "1" : "0"); } catch { /* nada */ } });
+  $("#bc-mais").onclick = () => { pagina++; desenhar(); };
+  $("#bc-resumo").onclick = (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    if (b.dataset.familia != null) { f.familia = b.dataset.familia; $("#bc-familia").value = f.familia; }
+    else if (b.dataset.un != null) { f.un = b.dataset.un; $("#bc-un").value = f.un; }
+    else return;
+    atualizar();
+  };
+  $("#bc-copiar-tudo").onclick = async () => {
+    const todas = (lista || R.res).slice(0, 5000);
+    const lin = todas.map(r => r.falta ? [r.falta, "NÃO ENCONTRADO NO BANCO", ""] : [r.it.c, r.it.d, r.it.u]);
+    const ok = await copiarTexto(["CÓDIGO\tDESCRIÇÃO\tUN", ...lin.map(l => l.join("\t"))].join("\r\n"));
+    toast(ok ? `📋 ${lin.length.toLocaleString("pt-BR")} linha(s) copiadas — cole no Excel.` : "Não consegui copiar neste navegador.");
+  };
+  $("#bc-corpo").onclick = async (e) => {
+    const b = e.target.closest("button"); if (!b) return;
+    const d = b.dataset;
+    if (d.hist) {
+      try { sessionStorage.setItem("rq.hist", JSON.stringify({ cod: d.hist, nome: "", espacos: true, tipo: "" })); } catch { /* nada */ }
+      location.hash = "#/historico";
+      return;
+    }
+    const r = linhasVis[+(d.copiar ?? d.copiarDesc ?? d.google)];
+    if (!r || !r.it) return;
+    if (d.google != null) {
+      sessionStorage.setItem("rq.lupa", r.it.c);
+      window.open("https://www.google.com/search?q=" + encodeURIComponent(r.it.d), "_blank", "noopener");
+      return;
+    }
+    const txt = d.copiar != null ? r.it.c : `${r.it.c} - ${r.it.d}`;
+    if (await copiarTexto(txt)) {
+      toast(d.copiar != null ? `Código ${r.it.c} copiado.` : "Código e descrição copiados.");
+      const tr = b.closest("tr");
+      tr.classList.remove("bc-copiado"); void tr.offsetWidth; tr.classList.add("bc-copiado");
+    } else toast("Não consegui copiar neste navegador.");
+  };
+
+  /* o banco chega depois (cache/nuvem): redesenha sem perder o que foi digitado */
+  aoMudarBanco = () => {
+    if (!$("#bc-tela")) { aoMudarBanco = null; return; }
+    opcoesUnidade(); atualizar();
+  };
+
+  preencher(); opcoesUnidade(); atualizar();
+  if (!movel) {
+    const foco = f.cod && !f.q ? inCod : inQ;
+    foco.focus(); foco.setSelectionRange(foco.value.length, foco.value.length);
+  }
 }
 
 function baixarBlob(blob, nome) {

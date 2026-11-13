@@ -16,6 +16,19 @@ Site estático (sem servidor) para criar listas de materiais a partir do banco d
 
 Antes de usar as unidades na nuvem, rode **uma vez** o arquivo `supabase_unidades.sql` no SQL Editor do Supabase. Ele cria as colunas `unidade` (pessoas, setores e projetos) e não apaga nada.
 
+## Busca de códigos
+
+No menu superior, **Busca de códigos** procura no **banco de itens inteiro** (não só no que já foi lançado). Sem nada digitado, mostra os códigos mais usados nas requisições da unidade.
+
+- **Descrição**: termos em qualquer ordem. `-palavra` exclui; `"frase exata"` entre aspas.
+- **Código**: pelo começo (ou em qualquer parte, nos critérios). **Cole uma lista de códigos** (do Excel, um por linha) para conferir todos de uma vez: os que não existem no banco aparecem em vermelho.
+- **Critérios**: começa com (família, ex.: CABO, DISJ), sem as palavras, unidade de medida, uso na unidade (já usados / com preço / nunca usados), situação (ativos/desativados) e ordem (relevância, mais usados, código, descrição).
+- **Busca flexível** (ligada por padrão): ignora espaços e traços; entende abreviações e plurais (DISJUNTORES acha DISJ, TRAFO acha TRANSFORMADOR, CAIXA acha CX); vírgula = ponto nas medidas (2,5 = 2.5). A lista de abreviações fica em `BC_ABREV` no `app.js`.
+- **Chips** de família e unidade abaixo do resumo refinam com um toque.
+- **Minhas buscas**: ☆ salva os critérios atuais com um nome (neste navegador).
+- Clique no **código** para copiar; **⧉ Cód. + descrição**, **🕘 Histórico** (abre o Histórico por item já filtrado) e **🔍 Google**. **📋 Copiar resultados** leva tudo para colar no Excel.
+- No celular, cada código vira um cartão com botões grandes; os critérios ficam recolhidos.
+
 ## Histórico por item
 
 No menu superior, **Histórico por item** lista todos os itens já lançados nas requisições da unidade, da data mais recente para a mais antiga. Filtre por **código** (pelo começo do código) ou por **nome** (termos em qualquer ordem). Ao digitar em um campo, o outro fica bloqueado. A tela mostra 30 linhas por vez.
