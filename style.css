@@ -706,3 +706,122 @@ td.h-vazio{text-align:center; color:var(--cinza); padding:34px 12px !important}
   .h-campo input{font-size:16px}
   table.app.cad{display:block; overflow-x:auto}
 }
+
+/* ============================================================
+   BUSCA DE CÓDIGOS — tela #/codigos (reaproveita .h-* do histórico)
+   ============================================================ */
+.bc-salvas{display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:-8px 0 12px}
+.bc-salvas:empty{display:none}
+.bc-salvas-rot{font-size:11px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; color:var(--cinza); margin-right:2px}
+.bc-salva{display:inline-flex; align-items:stretch; border:1px solid var(--linha); border-radius:20px; background:var(--branco); overflow:hidden}
+.bc-salva button{border:none; background:none; font:inherit; font-size:12.5px; cursor:pointer; color:var(--tinta); padding:5px 4px 5px 11px}
+.bc-salva button:hover{color:var(--vermelho)}
+.bc-salva .bc-salva-x{padding:5px 9px 5px 5px; color:var(--cinza-claro); font-size:11px}
+.bc-salva .bc-salva-x:hover{color:var(--vermelho)}
+.bc-salvar{border:1px dashed var(--cinza-claro); background:none; border-radius:20px; font:inherit; font-size:12.5px; padding:5px 11px; cursor:pointer; color:var(--cinza)}
+.bc-salvar:hover:not([disabled]){border-color:var(--vermelho); color:var(--vermelho)}
+.bc-salvar[disabled]{opacity:.45; cursor:default}
+
+.bc-filtros .h-campo.nome{flex:2 1 380px}
+.bc-filtros .h-campo.cod{flex:1 1 220px}
+.h-campo.bc-lista input{background:var(--amarelo-suave); border-color:#e7cf63}
+.h-campo.bc-lista label{color:#8a6d00}
+.bc-dica{flex:1 1 100%; font-size:11.5px; color:var(--cinza); margin-top:-4px}
+.bc-dica code{background:var(--fundo); border:1px solid var(--linha); border-radius:4px; padding:0 4px; font-size:11px; color:var(--tinta)}
+
+.bc-criterios{flex:1 1 100%; border-top:1px solid var(--linha); padding-top:8px}
+.bc-criterios summary{cursor:pointer; font-size:11px; font-weight:700; letter-spacing:.07em; text-transform:uppercase; color:var(--grafite); padding:4px 0; user-select:none; list-style-position:inside}
+.bc-criterios summary:hover{color:var(--vermelho)}
+.bc-nativos{display:inline-block; margin-left:6px; background:var(--vermelho); color:#fff; border-radius:20px; padding:0 8px; font-size:10.5px; letter-spacing:0; text-transform:none; vertical-align:1px}
+.bc-nativos:empty{display:none}
+.bc-grade{display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:10px 12px; margin-top:8px}
+.bc-crit{display:flex; flex-direction:column; gap:4px; min-width:0}
+.bc-crit > span{font-size:11px; font-weight:600; color:var(--cinza)}
+.bc-crit input, .bc-crit select{width:100%; font-size:13px; padding:7px 9px}
+.bc-flex{display:flex; flex-wrap:wrap; gap:4px 18px; align-items:center; margin-top:8px; font-size:12.5px}
+.bc-flex .check{margin:4px 0}
+.bc-flex small{color:var(--cinza-claro); font-size:11px; margin-left:2px}
+
+.bc-chips{display:flex; flex-wrap:wrap; align-items:center; gap:0}
+.bc-chips-rot{font-size:11.5px; font-weight:600; color:var(--grafite); margin:3px 6px 0 0}
+.h-chip.bc-ativo{background:var(--vermelho); border-color:var(--vermelho); color:#fff; font-weight:600}
+.h-chip.bc-ativo:hover{background:var(--vermelho-escuro); color:#fff}
+.bc-dica-chip{font-size:11px; color:var(--cinza-claro); margin:3px 0 0 4px}
+.bc-alerta{color:var(--vermelho) !important}
+
+table.app.bc{box-shadow:none; min-width:860px}
+table.bc td{vertical-align:middle}
+table.bc th.num{text-align:right}
+table.bc .bc-cod{white-space:nowrap; width:1%}
+.bc-copiar{
+  border:1px solid transparent; background:none; font:inherit; font-weight:700; color:var(--vermelho); cursor:pointer;
+  font-variant-numeric:tabular-nums; padding:4px 7px; margin-left:-7px; border-radius:var(--raio-mini); font-size:13.5px;
+}
+.bc-copiar:hover{border-color:#f3c2ca; background:var(--vermelho-suave)}
+.bc-copiar .bc-ico{font-weight:400; font-size:11px; margin-left:5px; color:var(--cinza-claro)}
+.bc-copiar:hover .bc-ico{color:var(--vermelho)}
+.bc-cod-txt{font-weight:700; color:var(--cinza); font-variant-numeric:tabular-nums}
+table.bc .bc-desc{line-height:1.4; min-width:260px}
+table.bc .bc-un{color:var(--cinza); white-space:nowrap}
+table.bc .bc-preco{white-space:nowrap}
+table.bc .bc-preco small{display:block; font-size:10.5px; color:var(--cinza-claro)}
+table.bc .bc-uso{font-size:12px; white-space:nowrap; color:var(--cinza)}
+table.bc .bc-uso b{color:var(--tinta)}
+.bc-mudo{color:var(--cinza-claro)}
+table.bc .bc-acoes{white-space:nowrap; text-align:right}
+table.bc .bc-acoes .btn{margin-left:4px; font-weight:500}
+table.bc mark{background:#ffe58a; color:inherit; border-radius:2px; padding:0}
+table.bc tr.bc-inativo td{color:var(--cinza)}
+table.bc tr.bc-falta td{background:var(--vermelho-suave)}
+.bc-sub{font-size:11.5px; color:var(--cinza); margin-top:2px}
+@keyframes bc-pisca{from{background:var(--verde-suave)} to{background:transparent}}
+table.bc tr.bc-copiado td{animation:bc-pisca 1.2s ease-out}
+
+/* celular: cada código vira um cartão; ações grandes para o dedo */
+@media (max-width:900px){
+  .bc-filtros .h-campo.nome, .bc-filtros .h-campo.cod{flex:1 1 100%}
+  .bc-dica{display:none}
+  .bc-criterios summary{font-size:12px; padding:8px 0}
+  .bc-grade{grid-template-columns:1fr 1fr; gap:10px}
+  .bc-crit input, .bc-crit select{font-size:16px; padding:9px 10px}
+  .bc-flex{flex-direction:column; align-items:stretch; gap:0}
+  .bc-flex .check{margin:0; padding:9px 0; border-bottom:1px solid var(--fundo)}
+  .bc-flex .espacador{display:none}
+  .bc-flex .btn{margin-top:8px}
+  .bc-salvas{margin-top:-6px; flex-wrap:nowrap; overflow-x:auto; padding-bottom:4px; -webkit-overflow-scrolling:touch}
+  .bc-salva, .bc-salvar{flex:none}
+  .bc-salva button, .bc-salvar{font-size:13.5px; padding-top:8px; padding-bottom:8px}
+  .h-chip{padding:5px 11px; font-size:12.5px}
+
+  .bc-rolagem{overflow:visible; box-shadow:none}
+  table.app.bc{min-width:0; display:block; background:none; box-shadow:none; overflow:visible}
+  table.bc thead{display:none}
+  table.bc tbody{display:flex; flex-direction:column; gap:8px}
+  table.bc tr{
+    display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 10px; align-items:center;
+    background:var(--branco); border:1px solid var(--linha); border-left:4px solid var(--vermelho);
+    border-radius:var(--raio); padding:10px 12px; box-shadow:var(--sombra);
+  }
+  table.bc tr.bc-inativo{border-left-color:var(--cinza-claro)}
+  table.bc tr.bc-falta{border-left-color:var(--vermelho-escuro); background:var(--vermelho-suave)}
+  table.app.bc td{display:block; padding:0; border:none; background:none !important; font-size:14px}
+  table.app.bc tbody tr:hover td{background:none}
+  table.bc td.h-vazio{grid-column:1 / -1}
+  table.bc .bc-cod{grid-column:1; grid-row:1; width:auto}
+  .bc-copiar{font-size:17px; padding:6px 10px; margin-left:-10px; border-color:#f3c2ca; background:var(--vermelho-suave)}
+  .bc-copiar .bc-ico{font-size:13px; color:var(--vermelho)}
+  table.bc .bc-un{grid-column:2; grid-row:1; justify-self:end; font-size:12px; font-weight:600;
+    background:var(--fundo); border-radius:20px; padding:2px 9px}
+  table.bc .bc-un:empty{display:none}
+  table.bc .bc-desc{grid-column:1 / -1; grid-row:2; min-width:0; font-size:14.5px; font-weight:500}
+  table.bc .bc-preco{grid-column:1; grid-row:3; text-align:left; font-size:13px}
+  table.bc .bc-preco small{display:inline; margin-left:5px}
+  table.bc .bc-uso{grid-column:2; grid-row:3; justify-self:end}
+  table.app.bc td.bc-acoes{grid-column:1 / -1; grid-row:4; display:flex; gap:6px; margin-top:6px; white-space:normal}
+  table.app.bc td.bc-acoes:empty{display:none}
+  /* sem preço e sem uso: some a linha de "—" */
+  table.app.bc td.bc-preco:has(> .bc-mudo:only-child), table.app.bc td.bc-uso:has(> .bc-mudo:only-child){display:none}
+  table.bc .bc-acoes .btn{flex:1; margin:0; padding:9px 6px; font-size:12.5px}
+  .h-rodape{flex-direction:column; gap:8px}
+  .h-rodape .btn{width:100%}
+}
