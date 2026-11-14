@@ -70,7 +70,7 @@ function unidadeSugerida(p) {
 }
 const unidadeDaPessoa = (p) => valorUnidade(p && p.unidade) || unidadeSugerida(p);
 const naUnidade = (u, un = UN) => u === un || u === TODOS;
-const pessoasUN  = (un = UN) => (pessoas || PESSOAS_PADRAO).filter(p => naUnidade(unidadeDaPessoa(p), un));
+const pessoasUN  = (un = UN) => (pessoas || PESSOAS_PADRAO).filter(p => p.papel !== "almoxarifado" && naUnidade(unidadeDaPessoa(p), un));
 const setoresUN  = (un = UN) => (setores || []).filter(s => naUnidade(unidadeDoSetor(s), un));
 const projetosUN = (un = UN) => projetos.filter(p => unidadeDoRegistro(p) === un);
 const listasUN   = (un = UN) => listas.filter(l => unidadeDoRegistro(l) === un);
@@ -118,7 +118,7 @@ function garantirUnidade(u) {
 function trocarUnidade(u) {
   if (!UNIDADES[u] || u === UN || !podeTrocarUnidade()) return;
   gravarUnidadeNaUrl(u);
-  if (/^#\/(lista|projeto)\//.test(location.hash)) location.hash = "#/";   // a tela aberta era da outra unidade
+  if (/^#\/(lista|projeto|os|separacao)\//.test(location.hash)) location.hash = "#/";   // a tela aberta era da outra unidade
   else render();
 }
 function desenharMarca() {
@@ -340,7 +340,8 @@ function normalizarLista(d) {
 const normalizarProjeto = (p) => (p && typeof p === "object" && typeof p.id === "string" && ID_OK.test(p.id))
   ? { ...p, nome: comoTexto(p.nome, 200), autor: comoTexto(p.autor, 200), status: p.status === "arquivado" ? "arquivado" : "andamento" } : null;
 const normalizarPessoa = (p) => (p && typeof p === "object" && typeof p.id === "string" && ID_OK.test(p.id))
-  ? { ...p, nome: comoTexto(p.nome, 200), cargo: comoTexto(p.cargo, 200), email: comoTexto(p.email, 200) } : null;
+  ? { ...p, nome: comoTexto(p.nome, 200), cargo: comoTexto(p.cargo, 200), email: comoTexto(p.email, 200),
+      papel: p.papel === "almoxarifado" ? "almoxarifado" : "assinante" } : null;
 const normalizarSetor = (s) => (s && typeof s === "object" && typeof s.id === "string" && ID_OK.test(s.id))
   ? { ...s, nome: comoTexto(s.nome, 60) } : null;
 
@@ -471,14 +472,14 @@ const colunasFaltando = new Set();             // "tabela.coluna" ausentes na nu
 let avisouMigracao = false;
 function notarColunaFaltando(tabela, coluna) {
   colunasFaltando.add(tabela + "." + coluna);
-  if (!avisouMigracao) { avisouMigracao = true; toast("⚠️ Falta rodar o supabase_unidades.sql no Supabase (veja Cadastros)."); }
+  if (!avisouMigracao) { avisouMigracao = true; toast("⚠️ Falta rodar um script do Supabase (veja Cadastros)."); }
 }
 function avisoMigracao() {
   if (!colunasFaltando.size) return "";
   return `<div class="aviso" style="margin-bottom:14px">⚠️ O Supabase ainda não tem a(s) coluna(s)
-    <strong>${[...colunasFaltando].map(esc).join(", ")}</strong>. Rode o arquivo <code>supabase_unidades.sql</code>
-    no SQL Editor do Supabase. Sem isso, a unidade de pessoas, setores e projetos não fica gravada na nuvem
-    e, ao recarregar, eles voltam a aparecer como UIS 3.</div>`;
+    <strong>${[...colunasFaltando].map(esc).join(", ")}</strong>. Rode no SQL Editor do Supabase
+    ${[...colunasFaltando].some(c => c.endsWith(".papel")) ? "<code>supabase/04_gestao_materiais.sql</code> (papel almoxarifado)" : "<code>supabase_unidades.sql</code> (unidade de pessoas, setores e projetos)"}.
+    Sem isso, esse dado não fica gravado na nuvem.</div>`;
 }
 async function upsertTolerante(tabela, obj) {
   if (!sb) return true;
@@ -743,9 +744,16 @@ function lembrarPreco(item) {
 }
 const precoLembrado = (item) => (precos[chavePreco(item)] || {}).preco;
 
-/* ---------------- banco de itens (IndexedDB) ---------------- */
-let BANCO = [];        // [{c: código, d: descrição, u: unidade, n: norm, ns: norm sem espaço}]
-let aoMudarBanco = null;   // tela de busca de códigos aberta: avisa quando o banco termina de carregar
+/* ---------------- banco de itens (IndexedDB) ----------------
+   No aparelho fica só o NÚCLEO do banco (manutenção, engenharia, adm).
+   Ele chega como UM pacote compacto (.tsv.gz, ~3 MB) do Storage, gerado
+   pela Edge Function "pacote-itens"; depois só vêm as mudanças
+   (conferência leve por atualizado_em).
+   · enquanto o pacote não terminou de chegar, a busca vai direto na nuvem;
+   · "Buscar outros" procura sempre na nuvem, só nos itens fora do núcleo;
+   · se o banco na nuvem ainda não tiver as funções novas, cai no método antigo. */
+let BANCO = [];        // [{c: código, d: descrição, u: unidade, a: ativo, n: norm, ns: norm sem espaço}]
+let aoMudarBanco = null;   // tela aberta que quer saber quando o banco muda
 const IDB = {
   abrir() {
     return new Promise((res, rej) => {
@@ -769,38 +777,236 @@ const IDB = {
       t.onsuccess = () => res(); t.onerror = () => rej(t.error);
     });
   },
+  async apagar(chave) {
+    const db = await this.abrir();
+    return new Promise((res, rej) => {
+      const t = db.transaction("kv", "readwrite").objectStore("kv").delete(chave);
+      t.onsuccess = () => res(); t.onerror = () => rej(t.error);
+    });
+  },
 };
 
+const pausa = (ms = 0) => new Promise(r => setTimeout(r, ms));
+/* estado do banco neste aparelho (barra de progresso, textos e decisão local × nuvem) */
+const BANCO_EST = { baixando: false, pct: 0, fase: "", origem: "", versao: "", em: "", erro: "", bytes: 0 };
+const bancoPronto = () => BANCO.length > 0;
+const SO_ASCII = /^[\x20-\x7e]*$/;
+const normRapido = (s) => SO_ASCII.test(s) ? s.toUpperCase() : norm(s);   // a maioria das descrições já vem limpa
+
+function itemDoBanco(c, d, u, a) {
+  const n = normRapido(d) + " " + c;
+  return { c, d, u: u || "UN", a: a === 0 ? 0 : 1, n, ns: semEspaco(n) };
+}
+/* compat: [código, descrição, unidade, ativo?] (modo local, banco.json e importação) */
 function indexarBanco(itens) {
-  // formato: [código, descrição, unidade, ativo?]  (ativo ausente = 1)
-  BANCO = itens.map(([c, d, u, a]) => {
-    const n = norm(d) + " " + String(c);
-    return { c: String(c), d: String(d), u: String(u || "UN"), a: a === 0 ? 0 : 1, n, ns: semEspaco(n) };
-  });
-  if (typeof aoMudarBanco === "function") setTimeout(aoMudarBanco, 0);   // tela de busca aberta: atualiza
+  BANCO = itens.map(([c, d, u, a]) => itemDoBanco(String(c), String(d), String(u || "UN"), a));
+  avisarBancoMudou();
+}
+function avisarBancoMudou() {
+  if (typeof aoMudarBanco === "function") setTimeout(aoMudarBanco, 0);
+  mostrarBanco();
 }
 
-/* aceita "em" antigo em dd/mm/aaaa e novo em ISO */
-function tempoDe(reg) {
-  if (!reg || !reg.em) return 0;
-  let em = reg.em;
-  if (/^\d{2}\//.test(em)) { const [d, m, a] = em.split("/"); em = `${a}-${m}-${d}`; }
-  const t = Date.parse(em);
-  return isNaN(t) ? 0 : t;
+/* indicador no topo + barra fina de progresso */
+let tMostrar = 0;
+function mostrarBanco(forcar) {
+  if (!forcar && Date.now() - tMostrar < 120) return;
+  tMostrar = Date.now();
+  const st = $("#status-banco"); if (!st) return;
+  const barra = $("#barra-banco");
+  const n = BANCO.length.toLocaleString("pt-BR");
+  if (BANCO_EST.baixando) {
+    const pct = Math.round(BANCO_EST.pct * 100);
+    st.textContent = `banco: ${BANCO_EST.fase || "baixando"}${pct ? " " + pct + "%" : "…"}${bancoPronto() ? "" : " · busca on-line"}`;
+    st.className = "status-banco carregando";
+    if (barra) { barra.hidden = false; barra.style.setProperty("--pct", Math.max(4, pct) + "%"); }
+  } else {
+    if (barra) barra.hidden = true;
+    if (BANCO_EST.erro && !bancoPronto()) { st.textContent = "banco: " + BANCO_EST.erro; st.className = "status-banco erro"; }
+    else if (bancoPronto()) {
+      st.textContent = `banco: ${n} itens${BANCO_EST.origem ? " · " + BANCO_EST.origem : ""}`;
+      st.className = "status-banco ok";
+    } else { st.textContent = "banco: carregando…"; st.className = "status-banco"; }
+  }
+  st.title = bancoPronto()
+    ? `Banco de manutenção neste aparelho: ${n} itens${BANCO_EST.versao ? " (pacote " + BANCO_EST.versao + ")" : ""}. Itens de outras áreas: marque “Buscar outros”.`
+    : "Enquanto o banco baixa, a busca é feita direto na nuvem.";
+}
+
+/* texto do pacote → itens indexados, em fatias (a tela não trava; enquanto isso a busca segue on-line) */
+async function montarBanco(reg) {
+  const extras = new Map((reg.extras || []).map(e => [e[0], e]));     // [c, d, u, a, escopo] mais novos que o pacote
+  const linhas = reg.tsv ? reg.tsv.split("\n") : [];
+  const novo = [];
+  const fase = BANCO_EST.fase;
+  for (let i = 0; i < linhas.length; i++) {
+    const l = linhas[i];
+    const t1 = l.indexOf("\t"); if (t1 < 1) continue;
+    const c = l.slice(0, t1);
+    if (extras.has(c)) continue;
+    const t2 = l.indexOf("\t", t1 + 1), t3 = t2 < 0 ? -1 : l.indexOf("\t", t2 + 1);
+    const d = t2 < 0 ? l.slice(t1 + 1) : l.slice(t1 + 1, t2);
+    const u = t2 < 0 ? "UN" : (t3 < 0 ? l.slice(t2 + 1) : l.slice(t2 + 1, t3));
+    novo.push(itemDoBanco(c, d, u, t3 >= 0 && l.slice(t3 + 1) === "0" ? 0 : 1));
+    if (i % 20000 === 19999) {
+      if (BANCO_EST.baixando) { BANCO_EST.fase = "preparando"; BANCO_EST.pct = i / linhas.length; mostrarBanco(); }
+      await pausa();
+    }
+  }
+  for (const [c, d, u, a, escopo] of extras.values()) if (escopo !== "outros" && a !== 0) novo.push(itemDoBanco(c, d, u, a));
+  BANCO_EST.fase = fase;
+  BANCO = novo;
+  avisarBancoMudou();
+}
+
+/* ---------- nuvem: pacote publicado, trechos de texto e mudanças ---------- */
+const semFuncao = (e) => !!e && (e.code === "PGRST202" || e.code === "42883" || e.code === "42P01" || e.code === "42703"
+  || /could not find|does not exist|schema cache/i.test(e.message || ""));
+async function lerMetaPacote() {
+  const { data, error } = await sb.from("req_meta").select("valor").eq("chave", "pacote").maybeSingle();
+  if (error) { if (semFuncao(error)) return null; throw new Error(error.message); }
+  return data && data.valor && data.valor.arquivo ? data.valor : null;
+}
+/* baixa o .tsv.gz do Storage, com progresso; devolve o texto */
+async function baixarPacote(meta) {
+  if (typeof DecompressionStream === "undefined") throw new Error("navegador sem descompactação");
+  const { data, error } = await sb.storage.from("req-pacotes").createSignedUrl(meta.arquivo, 900);
+  if (error || !data) throw new Error((error && error.message) || "sem link do pacote");
+  const r = await fetch(data.signedUrl, { cache: "no-store" });
+  if (!r.ok || !r.body) throw new Error("pacote indisponível (" + r.status + ")");
+  const total = +r.headers.get("content-length") || meta.bytes || 0;
+  const leitor = r.body.getReader(), partes = [];
+  let lidos = 0;
+  for (;;) {
+    const { done, value } = await leitor.read();
+    if (done) break;
+    partes.push(value); lidos += value.byteLength;
+    BANCO_EST.pct = total ? Math.min(0.99, lidos / total) : 0; mostrarBanco();
+  }
+  const bytes = new Uint8Array(lidos);
+  let p = 0; for (const v of partes) { bytes.set(v, p); p += v.byteLength; }
+  if (bytes[0] === 0x1f && bytes[1] === 0x8b)                    // gzip (normal)
+    return await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream("gzip"))).text();
+  return new TextDecoder().decode(bytes);                         // o servidor já entregou descompactado
+}
+/* sem pacote publicado (ou navegador antigo): o mesmo texto em trechos, pela função do banco */
+async function baixarPorTrechos(escopo = "nucleo", aoAvancar = null) {
+  const ult = await sb.from("req_itens").select("atualizado_em").order("atualizado_em", { ascending: false }).limit(1);
+  if (ult.error) throw ult.error;
+  const marco = ult.data && ult.data[0] ? ult.data[0].atualizado_em : null;
+  const partes = [];
+  let apos = "", n = 0;
+  for (;;) {
+    const { data, error } = await sb.rpc("req_pacote_parte", { p_apos: apos, p_lim: 40000, p_escopo: escopo });
+    if (error) throw error;
+    if (!data || !data.n) break;
+    partes.push(data.tsv); n += data.n; apos = data.ultimo;
+    if (aoAvancar) aoAvancar(n);
+    if (data.n < 40000) break;
+  }
+  return { tsv: partes.join("\n"), marco, total: n };
+}
+/* conferência leve: o que mudou depois do pacote (novos, alterados, mudaram de núcleo ↔ outros) */
+async function conferirMudancas(reg) {
+  if (!reg.marco) return reg;
+  const extras = new Map((reg.extras || []).map(e => [e[0], e]));
+  let marco = reg.marco, desde = reg.marco, lidos = 0;
+  for (;;) {
+    const { data, error } = await sb.from("req_itens").select("codigo,descricao,un,ativo,escopo,atualizado_em")
+      .gt("atualizado_em", desde).order("atualizado_em", { ascending: true }).order("codigo", { ascending: true })
+      .range(lidos, lidos + 999);
+    if (error) throw error;
+    for (const r of data || []) {
+      extras.set(String(r.codigo), [String(r.codigo), r.descricao, r.un || "UN", r.ativo ? 1 : 0, r.escopo || "nucleo"]);
+      if (Date.parse(r.atualizado_em) > Date.parse(marco)) marco = r.atualizado_em;
+    }
+    lidos += (data || []).length;
+    if (!data || !data.length) break;
+  }
+  if (!lidos) return reg;
+  const novo = { ...reg, extras: [...extras.values()], marco };
+  await IDB.gravar("banco3", novo).catch(() => {});
+  await montarBanco(novo);
+  return novo;
 }
 
 let bancoCarregando = false;                  // enquanto sincroniza, não se importa planilha por cima
-async function carregarBanco() {
+async function carregarBanco(forcarPacote = false) {
+  if (bancoCarregando) return;
   bancoCarregando = true;
-  try { await carregarBancoAgora(); } finally { bancoCarregando = false; }
+  try { await carregarBancoAgora(forcarPacote); }
+  finally { bancoCarregando = false; BANCO_EST.baixando = false; mostrarBanco(true); }
 }
-async function carregarBancoAgora() {
-  const st = $("#status-banco");
+async function carregarBancoAgora(forcarPacote) {
+  if (!sb) return carregarBancoLegado();                     // modo local: arquivo do site / deste navegador
+  BANCO_EST.erro = "";
+  let reg = forcarPacote ? null : await IDB.ler("banco3").catch(() => null);
+  if (reg && reg.v === 3 && typeof reg.tsv === "string") {
+    BANCO_EST.origem = "neste aparelho"; BANCO_EST.versao = reg.versao || "";
+    await montarBanco(reg);
+  } else reg = null;
+  try {
+    const meta = await lerMetaPacote();
+    if (meta && (!reg || reg.versao !== meta.versao)) {
+      BANCO_EST.baixando = true; BANCO_EST.fase = "baixando"; BANCO_EST.pct = 0; mostrarBanco(true);
+      let tsv = null;
+      try { tsv = await baixarPacote(meta); }
+      catch (e) { console.warn("pacote:", e.message); }
+      if (tsv != null) {
+        reg = { v: 3, versao: meta.versao, marco: meta.marco, tsv, extras: [], em: new Date().toISOString(), bytes: meta.bytes || 0 };
+      } else {                                                 // sem descompactação ou Storage fora: trechos
+        BANCO_EST.fase = "baixando (trechos)"; BANCO_EST.pct = 0;
+        const t = await baixarPorTrechos("nucleo", (n) => { BANCO_EST.pct = meta.total ? n / meta.total : 0; mostrarBanco(); });
+        reg = { v: 3, versao: meta.versao, marco: t.marco, tsv: t.tsv, extras: [], em: new Date().toISOString() };
+      }
+      BANCO_EST.fase = "preparando"; mostrarBanco(true);
+      await IDB.gravar("banco3", reg).catch(() => {});
+      IDB.apagar("banco").catch(() => {});                     // formato antigo (397 mil linhas): libera espaço
+      BANCO_EST.origem = "pacote " + dataBR(String(meta.gerado_em || "").slice(0, 10));
+      BANCO_EST.versao = meta.versao;
+      await montarBanco(reg);
+    } else if (!reg) {                                         // nada publicado ainda: trechos de texto
+      BANCO_EST.baixando = true; BANCO_EST.fase = "baixando"; BANCO_EST.pct = 0; mostrarBanco(true);
+      let t;
+      try { t = await baixarPorTrechos("nucleo", (n) => { BANCO_EST.pct = Math.min(0.95, n / 260000); mostrarBanco(); }); }
+      catch (e) {
+        if (semFuncao(e)) { BANCO_EST.baixando = false; return carregarBancoLegado(); }   // banco sem as funções novas
+        throw e;
+      }
+      reg = { v: 3, versao: "trechos", marco: t.marco, tsv: t.tsv, extras: [], em: new Date().toISOString() };
+      await IDB.gravar("banco3", reg).catch(() => {});
+      IDB.apagar("banco").catch(() => {});
+      BANCO_EST.origem = "nuvem"; BANCO_EST.versao = "";
+      await montarBanco(reg);
+    }
+    BANCO_EST.baixando = false;
+    if (reg) await conferirMudancas(reg);
+    if (!bancoPronto()) BANCO_EST.erro = "nuvem vazia — importe o .xlsx em “Banco de itens”";
+  } catch (e) {
+    console.warn("banco:", e && e.message);
+    BANCO_EST.baixando = false;
+    if (bancoPronto()) BANCO_EST.origem = "neste aparelho · nuvem indisponível";
+    else BANCO_EST.erro = "sem conexão — a busca usa a nuvem quando a rede voltar";
+  }
+}
+
+/* ---------- busca direto na nuvem (banco ainda baixando, ou "Buscar outros") ---------- */
+async function buscarNaNuvem(consulta, escopo = "nucleo", limite = 60, flex = true) {
+  if (!sb) return { ok: false, motivo: "Busca na nuvem indisponível no modo local." };
+  if (navigator.onLine === false) return { ok: false, motivo: "Sem conexão com a internet." };
+  try {
+    const { data, error } = await sb.rpc("req_buscar_itens", { p_q: String(consulta || ""), p_escopo: escopo, p_lim: limite, p_flex: !!flex });
+    if (error) return { ok: false, motivo: semFuncao(error) ? "A busca on-line ainda não foi instalada no banco." : error.message };
+    return { ok: true, itens: (data || []).map(r => Object.assign(itemDoBanco(String(r.codigo), r.descricao || "", r.un || "UN", r.ativo ? 1 : 0),
+      { usado: !!r.usado, outros: r.escopo === "outros", online: true })) };
+  } catch (e) { return { ok: false, motivo: e.message || "falha de rede" }; }
+}
+
+/* ---------- método antigo (banco sem as funções novas, ou modo local) ---------- */
+async function carregarBancoLegado() {
   const mostrar = (reg, origem) => {
+    BANCO_EST.origem = origem; BANCO_EST.erro = "";
     indexarBanco(reg.itens);
-    const ativos = BANCO.filter(i => i.a).length;
-    st.textContent = `banco: ${ativos.toLocaleString("pt-BR")} ativos de ${BANCO.length.toLocaleString("pt-BR")} (${origem})`;
-    st.className = "status-banco ok";
   };
   try {
     const local = await IDB.ler("banco").catch(() => null);
@@ -808,7 +1014,7 @@ async function carregarBancoAgora() {
     /* ---- modo nuvem: sincroniza com a tabela req_itens ---- */
     if (sb) {
       if (local && local.itens && local.itens.length) mostrar(local, "cache — sincronizando…");
-      else { st.textContent = "banco: baixando da nuvem…"; st.className = "status-banco"; }
+      else { BANCO_EST.baixando = true; BANCO_EST.fase = "baixando (método antigo)"; mostrarBanco(true); }
       try {
         const mapa = new Map((local && local.itens || []).map(i => [String(i[0]), i]));
         const desde = (local && local.sync) || null;
@@ -827,7 +1033,7 @@ async function carregarBancoAgora() {
           }
           baixados += (data || []).length;
           if (baixados && baixados % 5000 === 0) {
-            st.textContent = `banco: baixando da nuvem… ${baixados.toLocaleString("pt-BR")} itens`;
+            BANCO_EST.fase = `baixando ${baixados.toLocaleString("pt-BR")} itens`; mostrarBanco(true);
             await new Promise(r => setTimeout(r, 0));
           }
           if (!data || !data.length) break;            // só para quando vier vazio (o servidor pode limitar a menos de 1000)
@@ -838,13 +1044,11 @@ async function carregarBancoAgora() {
           mostrar(reg, baixados ? `nuvem · ${baixados.toLocaleString("pt-BR")} sincronizados` : "nuvem · em dia");
           return;
         }
-        st.textContent = "banco: nuvem vazia — importe o .xlsx em “Banco de itens”";
-        st.className = "status-banco erro";
+        BANCO_EST.erro = "nuvem vazia — importe o .xlsx em “Banco de itens”";
         return;
       } catch (e) {
         if (local && local.itens && local.itens.length) { mostrar(local, "cache local — nuvem indisponível"); return; }
-        st.textContent = "banco: erro na nuvem (" + e.message + ")";
-        st.className = "status-banco erro";
+        BANCO_EST.erro = "erro na nuvem (" + e.message + ")";
         return;
       }
     }
@@ -862,16 +1066,23 @@ async function carregarBancoAgora() {
       ? { reg: local, origem: "deste navegador" }
       : (web && web.itens && web.itens.length ? { reg: web, origem: urlWeb.includes("exemplo") ? "EXEMPLO — importe o real" : "do site" } : null);
     if (!escolhido) {
-      st.textContent = "banco: vazio — clique em “Banco de itens” para importar o .xlsx";
-      st.className = "status-banco erro";
+      BANCO_EST.erro = "vazio — clique em “Banco de itens” para importar o .xlsx";
       return;
     }
     if (escolhido.reg === web && tempoDe(web) > tempoDe(local)) await IDB.gravar("banco", web).catch(() => {});
     mostrar(escolhido.reg, escolhido.origem);
   } catch (e) {
-    st.textContent = "banco: erro ao carregar (" + e.message + ")";
-    st.className = "status-banco erro";
-  }
+    BANCO_EST.erro = "erro ao carregar (" + e.message + ")";
+  } finally { BANCO_EST.baixando = false; mostrarBanco(true); }
+}
+
+/* "em" antigo em dd/mm/aaaa e novo em ISO */
+function tempoDe(reg) {
+  if (!reg || !reg.em) return 0;
+  let em = reg.em;
+  if (/^\d{2}\//.test(em)) { const [d, m, a] = em.split("/"); em = `${a}-${m}-${d}`; }
+  const t = Date.parse(em);
+  return isNaN(t) ? 0 : t;
 }
 
 /* ---------------- importação do .xlsx da empresa ---------------- */
@@ -940,10 +1151,12 @@ async function importarArquivoBanco(arquivo) {
   }
   if (!novos.length) throw new Error("Nenhum item encontrado no arquivo.");
 
-  /* --- mescla: adiciona novos, atualiza existentes, desativa ausentes --- */
-  prog.textContent = "Mesclando com o banco atual…";
+  /* --- mescla: adiciona novos, atualiza existentes, desativa ausentes ---
+     Na nuvem, a comparação é com o banco INTEIRO (núcleo + outros), não só com o que está neste aparelho. */
+  prog.textContent = "Lendo o banco atual…";
   await new Promise(r => setTimeout(r, 20));
-  const anterior = new Map(BANCO.map(i => [i.c, [i.c, i.d, i.u, i.a]]));
+  const anterior = await itensAtuaisParaMesclar(prog);
+  prog.textContent = "Mesclando com o banco atual…";
   const vistos = new Set();
   let qNovos = 0, qAtualizados = 0, qReativados = 0, qDesativados = 0;
 
@@ -968,19 +1181,20 @@ async function importarArquivoBanco(arquivo) {
   }
 
   /* remoção em massa pede confirmação explícita (arquivo errado ou filtro de grupos trocado não esvazia o banco de todos) */
-  if (removidos.length && !confirm(`Esta carga vai REMOVER ${removidos.length.toLocaleString("pt-BR")} de ${(removidos.length + anterior.size).toLocaleString("pt-BR")} itens do banco`
-      + (sb ? " — para toda a equipe" : "") + ` (não constam no arquivo ou ficaram fora dos grupos escolhidos).\n\nContinuar?`)) {
+  if (removidos.length && !await confirmar({ titulo: `Remover ${removidos.length.toLocaleString("pt-BR")} itens do banco?`, icone: "⚠", perigo: true, ok: "Remover e continuar",
+      texto: `Esta carga vai <strong>remover ${removidos.length.toLocaleString("pt-BR")}</strong> de ${(removidos.length + anterior.size).toLocaleString("pt-BR")} itens do banco`
+        + (sb ? " — <strong>para toda a equipe</strong>" : "") + " (não constam no arquivo ou ficaram fora dos grupos escolhidos)." })) {
     prog.textContent = "Importação cancelada. Nada foi alterado.";
     return;
   }
   const itens = [...anterior.values()];
-  prog.textContent = "Salvando no navegador…";
   const agora = new Date().toISOString();
-  /* sem "sync" quando houve remoção: os outros dispositivos refazem a carga completa,
-     pois a sincronização incremental não enxerga itens excluídos */
-  const registro = { v: 2, em: agora, sync: removidos.length ? null : agora, itens };
-  await IDB.gravar("banco", registro);
-  indexarBanco(itens);
+  if (!sb) {
+    prog.textContent = "Salvando no navegador…";
+    /* modo local: o banco inteiro fica neste navegador */
+    await IDB.gravar("banco", { v: 2, em: agora, sync: agora, itens });
+    indexarBanco(itens);
+  }
 
   /* apaga na nuvem os itens que saíram do banco (inativos / grupos não escolhidos) */
   if (sb && removidos.length) {
@@ -1006,16 +1220,74 @@ async function importarArquivoBanco(arquivo) {
     }
   }
 
+  /* nuvem: gera o pacote novo para os celulares (itens removidos só somem com pacote novo) */
+  let msgPacote = "";
+  if (sb && (alterados.length || removidos.length)) {
+    try {
+      prog.textContent = "Gerando o pacote compacto para os celulares…";
+      const m = await publicarPacote((t) => { prog.textContent = t; });
+      msgPacote = `<br>Pacote para celulares publicado: ${(m.total || 0).toLocaleString("pt-BR")} itens de manutenção (${fmtBytes(m.bytes)}).`;
+      carregarBanco();
+    } catch (e) {
+      msgPacote = `<br>⚠️ O pacote para celulares não foi gerado agora (${esc(e.message)}). Use “Publicar pacote” abaixo.`;
+    }
+  }
+
   prog.innerHTML = `<strong>Mesclagem concluída:</strong> ${qNovos.toLocaleString("pt-BR")} novos · `
     + `${qAtualizados.toLocaleString("pt-BR")} atualizados · ${qReativados.toLocaleString("pt-BR")} reativados · `
     + `${qDesativados.toLocaleString("pt-BR")} removidos`
     + (baseCompleta ? "" : "<br>⚠️ Arquivo pequeno em relação ao banco atual: nada foi desativado (parece uma carga parcial).")
     + `<br>Total agora: ${itens.length.toLocaleString("pt-BR")} itens. `
-    + (sb ? "Enviado para a nuvem: toda a equipe já vê a base atualizada."
+    + (sb ? "Enviado para a nuvem: toda a equipe já vê a base atualizada." + msgPacote
           : "Para valer em todos os computadores, clique em “Baixar banco.json” e substitua o arquivo <code>dados/banco.json</code> no repositório.");
-  const st = $("#status-banco");
-  st.textContent = `banco: ${itens.filter(i => i[3] === 1).length.toLocaleString("pt-BR")} ativos de ${itens.length.toLocaleString("pt-BR")} (deste navegador · ${dataBR(hoje())})`;
-  st.className = "status-banco ok";
+  mostrarBanco(true);
+  if (typeof atualizarPainelBanco === "function") atualizarPainelBanco();
+}
+
+/* o banco atual inteiro, para comparar com a planilha nova: [código, descrição, unidade, ativo] */
+async function itensAtuaisParaMesclar(prog) {
+  if (!sb) return new Map(BANCO.map(i => [i.c, [i.c, i.d, i.u, i.a]]));
+  const mapa = new Map();
+  try {
+    let apos = "";
+    for (;;) {
+      const { data, error } = await sb.rpc("req_pacote_parte", { p_apos: apos, p_lim: 50000, p_escopo: "todos" });
+      if (error) throw error;
+      if (!data || !data.n) break;
+      for (const l of data.tsv.split("\n")) {
+        const p = l.split("\t");
+        if (p[0]) mapa.set(p[0], [p[0], p[1] || "", p[2] || "UN", p[3] === "0" ? 0 : 1]);
+      }
+      apos = data.ultimo;
+      prog.textContent = `Lendo o banco atual da nuvem… ${mapa.size.toLocaleString("pt-BR")} itens`;
+      if (data.n < 50000) break;
+    }
+    return mapa;
+  } catch (e) {
+    if (!semFuncao(e)) throw new Error("não consegui ler o banco atual da nuvem (" + (e.message || e) + ")");
+  }
+  /* banco sem as funções novas: lista completa, página a página (lento, mas só nesta tela) */
+  const r = await buscarPorChave("req_itens", "codigo,descricao,un,ativo", "codigo", 1000);
+  if (r.error) throw new Error(r.error.message);
+  for (const x of r.data) mapa.set(String(x.codigo), [String(x.codigo), x.descricao, x.un || "UN", x.ativo ? 1 : 0]);
+  return mapa;
+}
+
+const fmtBytes = (b) => !b ? "—" : b < 1048576 ? Math.round(b / 1024) + " kB" : (b / 1048576).toFixed(1).replace(".", ",") + " MB";
+
+/* pede o pacote novo à nuvem e espera ficar pronto (até ~3 min) */
+async function publicarPacote(aoAvancar) {
+  const antes = await lerMetaPacote().catch(() => null);
+  const { error } = await sb.rpc("req_pacote_publicar");
+  if (error) throw new Error(semFuncao(error) ? "a publicação ainda não foi instalada no banco" : error.message);
+  const t0 = Date.now();
+  while (Date.now() - t0 < 180000) {
+    await pausa(3000);
+    if (aoAvancar) aoAvancar(`Gerando o pacote compacto para os celulares… ${Math.round((Date.now() - t0) / 1000)} s`);
+    const m = await lerMetaPacote().catch(() => null);
+    if (m && (!antes || m.versao !== antes.versao)) return m;
+  }
+  throw new Error("o pacote não ficou pronto em 3 minutos");
 }
 
 /* ============================================================
@@ -1091,7 +1363,7 @@ function escolherGrupos(brutos, inativos) {
     cx.querySelector("#tri-nenhum").onclick = () => { marcados.clear(); desenhar(); };
     cx.querySelector("#tri-cancelar").onclick = () => { cx.remove(); resolve(null); };
     cx.querySelector("#tri-ok").onclick = () => {
-      if (!marcados.size) { alert("Marque ao menos um grupo."); return; }
+      if (!marcados.size) { toast("Marque ao menos um grupo."); return; }
       LS.gravar("rq.gruposEscolhidos", [...marcados]);   // lembra a escolha nas próximas cargas
       cx.remove();
       resolve(marcados);
@@ -1108,7 +1380,7 @@ function escolherGrupos(brutos, inativos) {
 /* baixa o banco mesclado para publicar no repositório (dados/banco.json) */
 async function baixarBancoJson() {
   const reg = await IDB.ler("banco");
-  if (!reg || !reg.itens || !reg.itens.length) { alert("Não há banco importado neste navegador ainda."); return; }
+  if (!reg || !reg.itens || !reg.itens.length) { toast("Não há banco importado neste navegador ainda."); return; }
   const blob = new Blob([JSON.stringify(reg)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
@@ -1168,6 +1440,15 @@ function novaLista(titulo, projetoId, tipo) {
     assinaturasManuais: false,
     criadoEm: hoje(),
   };
+}
+/* título (e projeto) de uma lista nova — no lugar dos antigos prompt() */
+function formNovaLista(tipo = "RM", projetoId = "") {
+  const projs = projetosUN().filter(p => p.status !== "arquivado");
+  return formulario(tipo === "MM" ? "Novo cadastro de Mínimo e Máximo" : "Nova requisição de material", [
+    { nome: "titulo", rot: "Título", ph: tipo === "MM" ? "Ex.: Mín/máx — rolamentos do extrator" : "Ex.: Materiais do CCM do farelo",
+      ajuda: "Aparece no cartão e no nome do PDF. Dá para mudar depois." },
+    ...(tipo === "MM" ? [] : [{ nome: "projeto", rot: "Projeto (opcional)", opcoes: [["", "— sem projeto —"], ...projs.map(p => [p.id, p.nome])] }]),
+  ], { titulo: "", projeto: projetoId || "" });
 }
 /* completa a lista recém-criada com as assinaturas do próprio criador */
 function prepararAssinaturas(l) {
@@ -1367,16 +1648,32 @@ function render() {
     const b = $("#btn-recarregar"); if (b) b.onclick = () => location.reload();
   }
 }
+let rotaAnterior = "";
 function desenharTela() {
   const h = location.hash || "#/";
   const app = $("#app");
   sairDoEditor();                                   // salva pendências do editor anterior
   if (sb && !primeiraCarga && Date.now() - ultimaSinc > 8000) sincronizar();   // tela nova, dados frescos
   app.onclick = null; app.onchange = null;          // cada tela liga os próprios eventos
+  GM.tela = null;                                   // Gestão de Materiais: só a tela aberta se redesenha
+  document.body.classList.remove("com-lote");
   aplicarUnidade();                                 // UIS ou UIS 3 (URL / login)
+  /* almoxarifado: só separação (e busca de códigos) */
+  document.body.classList.toggle("perfil-almox", ehAlmox());
+  if (ehAlmox() && !(h.startsWith("#/separacao/") || h === "#/materiais/separacao" || h === "#/codigos")) { location.hash = "#/materiais/separacao"; return; }
   document.body.classList.toggle("pg-editor", h.startsWith("#/lista/"));
-  $$("#topo nav a[href]").forEach(a => a.classList.toggle("ativo", a.getAttribute("href") === h));
+  $$("#topo nav a[href]").forEach(a => {
+    const href = a.getAttribute("href");
+    a.classList.toggle("ativo", href === h || (href === "#/materiais" && (h.startsWith("#/materiais") || h.startsWith("#/os/") || h.startsWith("#/separacao/"))));
+  });
+  desenharMenuMovel();
+  if (h !== rotaAnterior) { rotaAnterior = h; window.scrollTo(0, 0); }   // tela nova começa do topo (redesenho não)
   if (h.startsWith("#/lista/"))       telaEditor(app, h.slice(8));
+  else if (h === "#/materiais/itens")  telaMateriais(app, "itens");
+  else if (h === "#/materiais/separacao") telaMateriais(app, "separacao");
+  else if (h.startsWith("#/materiais")) telaMateriais(app, "quadro");
+  else if (h.startsWith("#/os/"))      telaOS(app, h.slice(5));
+  else if (h.startsWith("#/separacao/")) telaSeparacao(app, h.slice(12));
   else if (h.startsWith("#/projeto/")) telaProjeto(app, h.slice(10));
   else if (h === "#/historico")        telaHistorico(app);
   else if (h === "#/codigos")          telaBuscaCodigos(app);
@@ -1428,14 +1725,14 @@ function telaInicio(app) {
     const ult = ultimaEdicao(l);
     return `<div class="cartao ${l.status === "concluida" ? "concluida" : ""}">
       <h3><span class="etiqueta tipo">${l.tipo === "MM" ? "MM" : "RM"}</span> <a href="#/lista/${esc(l.id)}">${esc(l.titulo)}</a></h3>
-      <div class="sub">${l.itens.length} itens · criada em ${dataBR(l.criadoEm)}${l.autor ? ` · por ${esc(l.autor)}` : ""}${proj ? ` · <span class="etiqueta">${esc(proj.nome)}</span>` : ""}${l.status === "concluida" ? ' · <span class="etiqueta ok">✔ concluída</span>' : ""}</div>
+      <div class="sub">${l.itens.length} ite${l.itens.length === 1 ? "m" : "ns"} · criada em ${dataBR(l.criadoEm)}${l.autor ? ` · por ${esc(l.autor)}` : ""}${proj ? ` · <span class="etiqueta">${esc(proj.nome)}</span>` : ""}${l.status === "concluida" ? ' · <span class="etiqueta ok">✔ concluída</span>' : ""}</div>
       ${ult ? `<div class="sub ult" title="Última edição salva">✎ ${esc(dataHoraBR(ult.em))} · ${esc(ult.por)}</div>` : ""}
       <div class="rodape">
         <span class="valor">${dinheiro(totalDa(l))}</span>
         <span class="espacador"></span>
         <a class="btn mini" href="#/lista/${esc(l.id)}">Abrir</a>
         <button class="btn mini sec" data-duplicar="${esc(l.id)}">Duplicar</button>
-        <button class="btn mini perigo" data-excluir-lista="${esc(l.id)}">Excluir</button>
+        <button class="btn mini perigo icone" data-excluir-lista="${esc(l.id)}" title="Excluir" aria-label="Excluir">🗑</button>
       </div>
     </div>`;
   };
@@ -1448,7 +1745,7 @@ function telaInicio(app) {
       <div class="rodape"><span class="valor">${dinheiro(tot)}</span><span class="espacador"></span>
         <a class="btn mini sec" href="#/projeto/${esc(p.id)}">Resumo</a>
         <button class="btn mini sec" data-arquivar-projeto="${esc(p.id)}">${p.status === "arquivado" ? "Reativar" : "Arquivar"}</button>
-        <button class="btn mini perigo" data-excluir-projeto="${esc(p.id)}">Excluir</button></div>
+        <button class="btn mini perigo icone" data-excluir-projeto="${esc(p.id)}" title="Excluir projeto" aria-label="Excluir projeto">🗑</button></div>
     </div>`;
   };
 
@@ -1468,6 +1765,7 @@ function telaInicio(app) {
       <button class="btn sec" id="btn-nova-mm">+ Cadastro Mín/Máx (MM)</button>
       <button class="btn sec" id="btn-novo-projeto">+ Novo projeto</button>
     </div>
+    <div id="inicio-gm"></div>
     ${avisoMigracao()}
     ${ativos.length ? `<div class="secao-titulo">Projetos em andamento</div><div class="grade-cartoes">${ativos.map(cartaoProjeto).join("")}</div>` : ""}
     <div class="secao-titulo">Requisições (RM)</div>
@@ -1480,30 +1778,35 @@ function telaInicio(app) {
       : `<div class="vazio">Nenhum cadastro de mín/máx ainda — use o botão “+ Cadastro Mín/Máx (MM)”.</div>`}
   `;
 
-  const criarLista = () => {
-    const titulo = prompt("Título da lista de materiais:", "");
-    if (titulo === null) return;
-    let projetoId = "";
-    const projs = projetosUN();
-    if (projs.length) {
-      const nomes = projs.map((p, i) => `${i + 1} - ${p.nome}`).join("\n");
-      const r = prompt("Vincular a um projeto? Digite o número (ou deixe vazio):\n" + nomes, "");
-      if (r) { const p = projs[parseInt(r, 10) - 1]; if (p) projetoId = p.id; }
-    }
-    const l = prepararAssinaturas(novaLista(titulo.trim() || "Nova requisição", projetoId));
+  const criarLista = async () => {
+    const v = await formNovaLista("RM");
+    if (!v) return;
+    const l = prepararAssinaturas(novaLista(v.titulo.trim() || "Nova requisição", v.projeto || ""));
     l.descricao = "";
     registrarLog(l, [{ k: "criada", t: "Requisição criada" }]);
     listas.push(l); salvarTudo(); nuvemSalvarLista(l);
     location.hash = "#/lista/" + l.id;
   };
+  /* faixa da Gestão de Materiais: o que pede ação (sem OC, atrasados, separação) */
+  const faixaGM = () => {
+    const el = $("#inicio-gm"); if (!el || !GM.pronto) return;
+    const idx = gmIdx(); let semOC = 0, atr = 0, emSep = 0;
+    for (const m of gmMat()) { const e = gmEtapa(m, idx); if (e === "aguardando") semOC++; if (e === "separacao") emSep++; if (gmAtrasado(m, e)) atr++; }
+    const seps = gmSep().filter(x => x.status === "enviada").length;
+    if (!semOC && !atr && !emSep && !seps) { el.innerHTML = ""; return; }
+    el.innerHTML = `<a class="faixa-gm" href="#/materiais/itens">📦 <strong>Gestão de Materiais</strong>
+      ${semOC ? `<span>${semOC} sem OC</span>` : ""}${atr ? `<span class="atraso">⚠ ${atr} com previsão vencida</span>` : ""}
+      ${seps ? `<span>${seps} lista(s) no almoxarifado</span>` : ""}<b>Abrir →</b></a>`;
+  };
+  if (GM.pronto) faixaGM(); else gmCarregar().then(faixaGM);
   $("#filtro-dono").onchange = (e) => { localStorage.setItem("rq.filtroDono", e.target.value); render(); };
   $("#filtro-ordem").onchange = (e) => { localStorage.setItem("rq.ordem", e.target.value); render(); };
   $("#btn-nova-lista").onclick = criarLista;
   const b2 = $("#btn-nova-lista-2"); if (b2) b2.onclick = criarLista;
-  $("#btn-nova-mm").onclick = () => {
-    const t = prompt("Título do cadastro de Mínimo e Máximo:", "");
-    if (t === null) return;
-    const l = novaLista(t.trim() || "Novo cadastro MM", "", "MM");
+  $("#btn-nova-mm").onclick = async () => {
+    const v = await formNovaLista("MM");
+    if (!v) return;
+    const l = novaLista(v.titulo.trim() || "Novo cadastro MM", "", "MM");
     l.numeroFO = MM_NUMERO;
     l.descricao = "RELAÇÃO DE MÍNIMOS E MÁXIMOS PARA COMPRA";
     l.setor = "";
@@ -1512,17 +1815,24 @@ function telaInicio(app) {
     listas.push(l); salvarTudo(); nuvemSalvarLista(l);
     location.hash = "#/lista/" + l.id;
   };
-  $("#btn-novo-projeto").onclick = () => {
-    const nome = prompt("Nome do projeto:");
+  $("#btn-novo-projeto").onclick = async () => {
+    const nome = await perguntar("Novo projeto", "Nome do projeto", "", { ph: "Ex.: Substituição do CCM do farelo", obrigatorio: true, erro: "Informe o nome do projeto.",
+      ajuda: "Projetos agrupam RMs e as OS do Sadege (uma por disciplina) na Gestão de Materiais." });
     if (!nome) return;
     const p = { id: uid(), nome: nome.trim(), status: "andamento", autor: (usuarioAtual && usuarioAtual.nome) || emailSessao || "", unidade: UN };
     projetos.push(p); salvarTudo(); nuvemSalvarProjeto(p); render();
   };
-  app.onclick = (e) => {
+  app.onclick = async (e) => {
     const d = e.target.dataset || {};
     if (d.excluirLista) {
       const l = listas.find(x => x.id === d.excluirLista);
-      if (confirm(`Excluir a lista “${l.titulo}”?${l.status === "concluida" ? "\n\nAtenção: esta requisição está CONCLUÍDA." : ""}`)) { listas = listas.filter(x => x.id !== d.excluirLista); salvarTudo(); nuvemExcluirLista(d.excluirLista); render(); }
+      const vinc = GM.pronto ? GM.mat.filter(m => m.lista_id === l.id).length : 0;
+      if (await confirmar({ titulo: `Excluir ${l.tipo === "MM" ? "o cadastro MM" : "a requisição"}?`, icone: "🗑", perigo: true, ok: "Excluir",
+        texto: `<strong>${esc(l.titulo)}</strong> · ${l.itens.length} item(ns) · ${dinheiro(totalDa(l))}`
+          + (l.status === "concluida" ? `<br><br>⚠ Esta requisição está <strong>CONCLUÍDA</strong>.` : "")
+          + (vinc ? `<br>${vinc} item(ns) dela estão na Gestão de Materiais e continuam lá.` : "") + "<br>Não dá para desfazer." })) {
+        listas = listas.filter(x => x.id !== d.excluirLista); salvarTudo(); nuvemExcluirLista(d.excluirLista); render(); toast("Lista excluída");
+      }
     }
     if (d.duplicar) {
       const o = listas.find(x => x.id === d.duplicar);
@@ -1539,7 +1849,11 @@ function telaInicio(app) {
     }
     if (d.excluirProjeto) {
       const p = projetos.find(x => x.id === d.excluirProjeto);
-      if (confirm(`Excluir o projeto “${p.nome}”? As listas continuam existindo, apenas sem o vínculo.`)) {
+      const nOS = GM.pronto ? GM.os.filter(o => o.projeto_id === p.id).length : 0;
+      if (await confirmar({ titulo: "Excluir o projeto?", icone: "🗑", perigo: true, ok: "Excluir projeto",
+        texto: `<strong>${esc(p.nome)}</strong><br>As listas continuam existindo, apenas sem o vínculo.`
+          + (nOS ? `<br>${nOS} OS deste projeto ficam soltas na Gestão de Materiais.` : "") })) {
+        if (nOS) gmAtualizar("os", GM.os.filter(o => o.projeto_id === p.id).map(o => o.id), { projeto_id: null });
         listas.forEach(l => {
           if (l.projetoId !== d.excluirProjeto) return;
           l.projetoId = "";
@@ -1594,25 +1908,28 @@ function telaProjeto(app, id) {
         <td class="num">${dinheiro(totalDa(l))}</td>
         <td><a class="btn mini sec" href="#/lista/${esc(l.id)}">Abrir</a></td></tr>`; }).join("") || `<tr><td colspan="6">Nenhuma lista vinculada.</td></tr>`}
     </tbody></table>
+    <div class="secao-titulo">OS e materiais (Gestão de Materiais)</div>
+    <div id="proj-os">${GM.pronto ? gmResumoProjeto(p.id) : '<div class="vazio">Carregando…</div>'}</div>
     <div class="secao-titulo">Materiais consolidados (todas as listas)</div>
     <table class="app"><thead><tr><th>Código</th><th>Descrição</th><th>Un</th><th class="num">Qtd. total</th><th class="num">Valor</th></tr></thead><tbody>
       ${consolidado.map(i => `<tr><td>${esc(i.codigo)}</td><td>${esc(i.descricao)}</td><td>${esc(i.un)}</td>
         <td class="num">${fmtBR.format(i.qtd)}</td><td class="num">${dinheiro(i.valor)}</td></tr>`).join("") || `<tr><td colspan="5">Sem itens.</td></tr>`}
     </tbody></table>`;
 
+  if (!GM.pronto) gmCarregar().then(() => { const el = $("#proj-os"); if (el) el.innerHTML = GM.semTabelas ? "" : gmResumoProjeto(p.id); });
   $("#btn-renomear").onclick = () => {
-    const n = prompt("Novo nome do projeto:", p.nome);
-    if (n) { p.nome = n.trim(); salvarTudo(); nuvemSalvarProjeto(p); render(); }
+    perguntar("Renomear projeto", "Nome do projeto", p.nome, { obrigatorio: true }).then(n => {
+      if (n) { p.nome = n; salvarTudo(); nuvemSalvarProjeto(p); render(); }
+    });
   };
   $("#btn-arquivar").onclick = () => {
     p.status = p.status === "arquivado" ? "andamento" : "arquivado";
     salvarTudo(); nuvemSalvarProjeto(p); render();
   };
-  $("#btn-lista-projeto").onclick = () => {
-    const pid = p.id;
-    const t = prompt("Título da lista:", "");
-    if (t === null) return false;
-    const l = prepararAssinaturas(novaLista(t.trim() || "Nova requisição", pid));
+  $("#btn-lista-projeto").onclick = async () => {
+    const v = await formNovaLista("RM", p.id);
+    if (!v) return false;
+    const l = prepararAssinaturas(novaLista(v.titulo.trim() || "Nova requisição", v.projeto || p.id));
     registrarLog(l, [{ k: "criada", t: "Requisição criada" }]);
     listas.push(l); salvarTudo(); nuvemSalvarLista(l);
     location.hash = "#/lista/" + l.id;
@@ -1661,7 +1978,7 @@ function telaArquivados(app) {
 function formulario(titulo, campos, valores = {}, validar = null) {
   return new Promise((resolve) => {
     const cx = document.createElement("div");
-    cx.className = "modal no-print";
+    cx.className = "modal no-print modal-form";
     cx.innerHTML = `<form class="modal-caixa form-cad" novalidate>
       <h2>${esc(titulo)}</h2>
       ${campos.map(c => `<div class="campo">
@@ -1703,13 +2020,14 @@ function telaCadastros(app) {
     <select class="sel-un" data-un-${tipo}="${esc(id)}" title="Unidade em que aparece">
       ${OPCOES_UNIDADE.map(([v, r]) => `<option value="${v}" ${v === atual ? "selected" : ""}>${r}</option>`).join("")}
     </select>${sugerido ? ' <span class="etiqueta sugerido" title="Deduzido pela função — escolha a unidade para confirmar">sugerido</span>' : ""}`;
-  const listaP = pessoas.filter(p => visivel(unidadeDaPessoa(p)));
+  const listaP = pessoas.filter(p => visivel(unidadeDaPessoa(p)))
+    .sort((a, b) => (a.papel === "almoxarifado") - (b.papel === "almoxarifado"));
   const listaS = setores.filter(s => visivel(unidadeDoSetor(s)))
     .sort((a, b) => String(a.nome).localeCompare(String(b.nome), "pt-BR", { numeric: true }));
   const ocultosP = pessoas.length - listaP.length, ocultosS = setores.length - listaS.length;
 
   const linhaPessoa = (p) => `<tr>
-    <td>${esc(p.nome)}${usuarioAtual && p === usuarioAtual ? ' <span class="etiqueta ok">você</span>' : ""}</td>
+    <td>${esc(p.nome)}${usuarioAtual && p === usuarioAtual ? ' <span class="etiqueta ok">você</span>' : ""}${p.papel === "almoxarifado" ? ' <span class="etiqueta almox" title="Só acessa as listas de separação; não assina">📋 almoxarifado</span>' : ""}</td>
     <td>${esc(p.cargo)}</td><td>${esc(p.email || "—")}</td>
     <td style="white-space:nowrap">${selUnidade("pessoa", p.id, unidadeDaPessoa(p), !valorUnidade(p.unidade))}</td>
     <td style="white-space:nowrap">
@@ -1739,13 +2057,13 @@ function telaCadastros(app) {
       ${podeTrocarUnidade() && !verTodas && (ocultosP || ocultosS)
         ? `<br>${[ocultosP ? `${ocultosP} pessoa(s)` : "", ocultosS ? `${ocultosS} setor(es)` : ""].filter(Boolean).join(" e ")} da outra unidade não aparecem nesta lista.` : ""}</div>
 
-    <div class="secao-titulo">Assinantes (nomes e funções)</div>
+    <div class="secao-titulo">Pessoas (assinantes e almoxarifado)</div>
     <p class="cad-nota">O <strong>e-mail</strong> vincula a pessoa ao login: quem entrar com ele vira o solicitante das novas listas e trabalha
       na unidade dela (com <strong>Todos</strong>, pode alternar entre UIS e UIS 3 no topo da tela).
       A alçada de assinaturas é montada pela <strong>função</strong>: Supervisor de Manutenção, Gerente Industrial e Gerente de Operações de cada unidade.</p>
     <table class="app cad"><thead><tr><th>Nome</th><th>Função</th><th>E-mail (login)</th><th>Unidade</th><th></th></tr></thead>
       <tbody>${listaP.map(linhaPessoa).join("") || `<tr><td colspan="5">Nenhuma pessoa cadastrada para esta unidade.</td></tr>`}</tbody></table>
-    <button class="btn" id="btn-add-pessoa" style="margin-top:10px">+ Adicionar assinante</button>
+    <button class="btn" id="btn-add-pessoa" style="margin-top:10px">+ Adicionar pessoa</button>
 
     <div class="secao-titulo">Setores (código numérico)</div>
     <p class="cad-nota">Aparecem como sugestão no campo <strong>SETOR</strong> da RM e do MM (que aceita apenas números).
@@ -1761,13 +2079,15 @@ function telaCadastros(app) {
         ajuda: "Quem entrar com este e-mail vira o solicitante das novas listas." },
       { nome: "unidade", rot: "Unidade", opcoes: OPCOES_UNIDADE,
         ajuda: "UIS e UIS 3 não se enxergam. “Todos” aparece nas duas (gerentes, coordenadores…)." },
-    ], p ? { nome: p.nome, cargo: p.cargo, email: p.email, unidade: unidadeDaPessoa(p) } : { unidade: UN },
+      { nome: "papel", rot: "Papel no app", opcoes: [["assinante", "Assinante / equipe (padrão)"], ["almoxarifado", "Almoxarifado — só listas de separação"]],
+        ajuda: "Almoxarifado entra pelo celular, vê e marca as listas de separação e não aparece como assinante." },
+    ], p ? { nome: p.nome, cargo: p.cargo, email: p.email, unidade: unidadeDaPessoa(p), papel: p.papel || "assinante" } : { unidade: UN, papel: "assinante" },
     (v) => {
       if (!v.nome.trim()) return "Informe o nome.";
       const em = norm(v.email.trim());
       if (em && pessoas.some(x => x !== p && x.email && norm(x.email) === em)) return "Este e-mail já está vinculado a outra pessoa.";
       return "";
-    }).then(v => v && { nome: v.nome.trim(), cargo: v.cargo.trim(), email: v.email.trim().toLowerCase(), unidade: v.unidade });
+    }).then(v => v && { nome: v.nome.trim(), cargo: v.cargo.trim(), email: v.email.trim().toLowerCase(), unidade: v.unidade, papel: v.papel });
 
   const formSetor = (s) => formulario(s ? "Editar setor" : "Novo setor", [
       { nome: "nome", rot: "Código do setor (somente números)", ph: "Ex.: 9313", attrs: 'inputmode="numeric" autocomplete="off"' },
@@ -1821,7 +2141,8 @@ function telaCadastros(app) {
     }
     if (d.excluirPessoa) {
       const p = pessoas.find(x => x.id === d.excluirPessoa);
-      if (confirm(`Excluir “${p.nome}” do cadastro de assinantes?`)) {
+      if (await confirmar({ titulo: "Excluir do cadastro?", icone: "🗑", perigo: true, ok: "Excluir",
+        texto: `<strong>${esc(p.nome)}</strong> — ${esc(p.cargo || "")}${p.email ? `<br>Quem entra com ${esc(p.email)} perde o acesso ao app.` : ""}` })) {
         pessoas = pessoas.filter(x => x.id !== d.excluirPessoa);
         salvarCadastros(); nuvemExcluirPessoa(d.excluirPessoa); deduzirUsuario(); render();
       }
@@ -1833,7 +2154,7 @@ function telaCadastros(app) {
     }
     if (d.excluirSetor) {
       const s = setores.find(x => x.id === d.excluirSetor);
-      if (confirm(`Excluir o setor “${s.nome}”?`)) {
+      if (await confirmar({ titulo: `Excluir o setor ${s.nome}?`, icone: "🗑", perigo: true, ok: "Excluir" })) {
         setores = setores.filter(x => x.id !== d.excluirSetor);
         salvarCadastros(); nuvemExcluirSetor(d.excluirSetor); render();
       }
@@ -1903,6 +2224,7 @@ function telaEditor(app, id) {
       </label>
       <span class="ed-sep"></span>
       <button class="btn sec ed-status" id="btn-status"></button>
+      ${ehMM ? "" : `<button class="btn sec ed-vinc" id="btn-vincular" title="Mandar itens desta RM concluída para uma OS do Sadege (Gestão de Materiais)">🔗 Vincular à OS</button>`}
       <button class="ed-salvo" id="ed-salvo" data-estado="salvo" title="Clique para salvar agora"></button>
       <span class="espacador"></span>
       <button class="btn sec" id="btn-resumo-mg" title="Excel sem formatação para copiar e colar: Código, Descrição, 4 colunas em branco, Quantidade, Unidade, Valor unitário, Valor total">📊 Resumo MG</button>
@@ -1932,13 +2254,16 @@ function telaEditor(app, id) {
             </div>
             <div class="busca-opcoes">
               <label><input type="checkbox" id="opt-espacos" checked> Ignorar espaços/traços</label>
+              <label class="chk-outros" title="Procura só nos itens que não são de manutenção (comida, roupa, agro, loja…), direto na nuvem"><input type="checkbox" id="opt-outros"> Buscar outros</label>
               <button class="btn sec mini" id="btn-avulso">+ Item avulso (S/ CÓD.)</button>
             </div>
+            <div class="busca-modo" id="busca-modo" hidden></div>
             <p class="trava-dica">🔒 Inclusão de itens bloqueada: a requisição está concluída.</p>
             <div id="resultados"></div>
             <div class="contagem" id="contagem"></div>
             <div class="dica">Vários termos = todos precisam aparecer, em qualquer ordem.
               Ex.: <em>cabo pp 4x2,5</em>. Acentos são ignorados. Amarelo = já usado antes; preço em verde vem do histórico.
+              Não achou? Marque <strong>Buscar outros</strong> (itens fora da manutenção, só na nuvem).
               <strong>Ctrl+K</strong> volta para a busca de qualquer ponto.</div>
           </section>
           <section class="lat-painel" data-painel="notas" hidden>
@@ -2073,24 +2398,31 @@ function telaEditor(app, id) {
     const t = travada();
     $(".ed").classList.toggle("travada", t);
     $("#ed-trava").hidden = !t;
+    const bv = $("#btn-vincular");
+    if (bv) {
+      bv.classList.toggle("pronto", t);
+      const n = GM.pronto ? GM.mat.filter(m => m.lista_id === L.id).length : 0;
+      bv.textContent = n ? `🔗 OS (${n}/${L.itens.length})` : "🔗 Vincular à OS";
+      bv.title = t ? "Mandar itens desta RM para uma OS do Sadege (Gestão de Materiais)" : "Conclua a RM para vincular os itens a uma OS";
+    }
     const bs = $("#btn-status");
     bs.textContent = t ? "✅ Concluída" : "🕓 Em andamento";
     bs.classList.toggle("concluida", t);
     bs.title = t ? "Concluída — clique para reabrir" : "Clique para marcar como concluída";
-    ["#ed-titulo", "#ed-projeto", "#ed-autor", "#ed-anotacoes", "#busca", "#opt-espacos", "#btn-avulso"]
+    ["#ed-titulo", "#ed-projeto", "#ed-autor", "#ed-anotacoes", "#busca", "#opt-espacos", "#opt-outros", "#btn-avulso"]
       .forEach(s => { const el = $(s); if (el) el.disabled = t; });
     if (t) { $("#busca").value = ""; resultadosAtuais = []; desenharResultados(); }
   }
   async function trocarStatus() {
     if (travada()) {
-      if (!confirm("Esta requisição está CONCLUÍDA e bloqueada para edição.\n\n"
-        + "Para editar, o status voltará para “Em andamento”. A reabertura fica registrada no histórico.\n\n"
-        + "Deseja reabrir a requisição?")) return;
+      const vinc = GM.pronto ? GM.mat.filter(m => m.lista_id === L.id).length : 0;
+      if (!await confirmar({ titulo: "Reabrir a requisição?", icone: "🔓", ok: "Reabrir para edição",
+        texto: "Ela está <strong>concluída</strong> e travada. Para editar, o status volta para “Em andamento”; a reabertura fica no histórico."
+          + (vinc ? `<br><br>⚠ ${vinc} item(ns) desta RM estão na Gestão de Materiais. O que você mudar aqui <strong>não</strong> muda lá.` : "") })) return;
       L.status = "andamento";
     } else {
-      if (!confirm("Marcar esta requisição como CONCLUÍDA?\n\n"
-        + "Ela ficará bloqueada para edição (impressão e PDF continuam liberados). "
-        + "Para alterá-la depois será preciso reabri-la.")) return;
+      if (!await confirmar({ titulo: "Concluir a requisição?", icone: "✅", ok: "Concluir",
+        texto: `<strong>${esc(L.titulo)}</strong> · ${L.itens.length} item(ns) · ${dinheiro(totalDa(L))}<br>Ela fica travada para edição (PDF e impressão continuam liberados). Depois você pode vincular os itens a uma OS.` })) return;
       L.status = "concluida";
     }
     desenharFolha();
@@ -2119,6 +2451,19 @@ function telaEditor(app, id) {
     salvar();
   };
   $("#btn-status").onclick = trocarStatus;
+  const btVinc = $("#btn-vincular");
+  if (btVinc) btVinc.onclick = async () => {
+    if (!travada()) {
+      if (await confirmar({ titulo: "Concluir antes de vincular", icone: "🔗", ok: "Concluir agora",
+        texto: "Só itens de RM <strong>concluída</strong> vão para a Gestão de Materiais (assim a lista não muda depois de vinculada). Concluir esta RM agora?" })) {
+        L.status = "concluida"; desenharFolha(); aplicarTrava(); salvarTudo(); await commit();
+        toast("✅ Requisição concluída");
+      } else return;
+    }
+    await commit();
+    gmVincularRM(L.id);
+  };
+  if (!GM.pronto) gmCarregar().then(() => { if (editorAtivo && editorAtivo.id === L.id) aplicarTrava(); });
   $("#btn-reabrir").onclick = trocarStatus;
   chip.onclick = () => { salvarTudo(); commit(); };
 
@@ -2221,7 +2566,8 @@ function telaEditor(app, id) {
       toast("📄 PDF baixado — A4 paisagem");
     } catch (e) {
       console.warn("pdf:", e);
-      if (confirm(`Não foi possível gerar o PDF direto (${e.message}).\n\nAbrir a impressão para salvar como PDF?`)) imprimirDocumento();
+      if (await confirmar({ titulo: "PDF direto indisponível", icone: "📄", ok: "Abrir a impressão",
+        texto: `Não foi possível gerar o PDF direto (${esc(e.message)}). Abrir a impressão do navegador para salvar como PDF?` })) imprimirDocumento();
     } finally {
       bt.disabled = false; bt.textContent = rotulo;
     }
@@ -2289,15 +2635,17 @@ function telaEditor(app, id) {
     const alvo = $("#resultados");
     alvo.innerHTML = resultadosAtuais.map((r, i) => {
       const ph = precoLembrado({ codigo: r.c, descricao: r.d });
-      return `<div class="resultado ${i === selecionado ? "ativo" : ""} ${r.usado ? "usado" : ""}" data-i="${i}">
-        <span class="cod">${esc(r.c)}</span><span class="desc">${esc(r.d)}${r.a ? "" : ' <span class="badge-inativo">DESATIVADO</span>'}</span>
+      return `<div class="resultado ${i === selecionado ? "ativo" : ""} ${r.usado ? "usado" : ""} ${r.outros ? "outros" : ""}" data-i="${i}">
+        <span class="cod">${esc(r.c)}</span><span class="desc">${esc(r.d)}${r.a ? "" : ' <span class="badge-inativo">DESATIVADO</span>'}${r.outros ? ' <span class="badge-outros" title="Fora do banco de manutenção — ao entrar numa requisição, passa a fazer parte dele">OUTROS</span>' : ""}</span>
         <span class="un">${esc(r.u)}</span>${ph ? `<span class="preco-hist">${dinheiro(ph)}</span>` : ""}
         <button class="lupa ${r.c === lupaAtiva ? "verde" : ""}" data-lupa="${i}" title="Pesquisar este item no Google (nova guia)">+🔍</button>
       </div>`;
     }).join("");
-    $("#contagem").textContent = resultadosAtuais.length
+    $("#contagem").textContent = buscando ? "Buscando na nuvem…" : erroBusca ? erroBusca : resultadosAtuais.length
       ? `${resultadosAtuais.length} resultado(s)` + (resultadosAtuais.length >= 60 ? " — refine a busca para ver mais" : "")
-      : (caixa.value.trim() ? "Nada encontrado. Tente menos termos ou marque “ignorar espaços”." : "");
+      : (caixa.value.trim() ? ($("#opt-outros").checked
+          ? "Nada encontrado também fora da manutenção. Tente menos termos."
+          : "Nada encontrado. Tente menos termos, “ignorar espaços” ou marque “Buscar outros”.") : "");
     $$(".resultado", alvo).forEach(el => el.onclick = () => adicionarDoBanco(resultadosAtuais[+el.dataset.i]));
     $$(".lupa", alvo).forEach(el => el.onclick = (e) => {
       e.stopPropagation();                                   // não adiciona o item à lista
@@ -2308,16 +2656,48 @@ function telaEditor(app, id) {
       window.open("https://www.google.com/search?q=" + encodeURIComponent(r.d), "_blank");
     });
   };
-  let timer = null;
+  /* local (banco no aparelho) ou nuvem (banco ainda baixando / "Buscar outros") */
+  let timer = null, seqBusca = 0, buscando = false, erroBusca = "";
+  const modoBusca = () => {
+    const el = $("#busca-modo"); if (!el) return;
+    const outros = $("#opt-outros").checked;
+    const txt = outros ? "🌐 Itens fora da manutenção (comida, roupa, agro, loja…) — busca direto na nuvem."
+      : !bancoPronto() ? `🌐 Busca on-line enquanto o banco baixa${BANCO_EST.baixando && BANCO_EST.pct ? " (" + Math.round(BANCO_EST.pct * 100) + "%)" : ""}.` : "";
+    el.hidden = !txt; el.textContent = txt;
+    el.classList.toggle("outros", outros);
+  };
   caixa.oninput = () => {
     clearTimeout(timer);
-    timer = setTimeout(() => {
-      resultadosAtuais = buscar(caixa.value, $("#opt-espacos").checked);
+    const q = caixa.value, espacos = $("#opt-espacos").checked, outros = $("#opt-outros").checked;
+    const naNuvem = outros || !bancoPronto();
+    modoBusca();
+    if (!q.trim()) { seqBusca++; buscando = false; erroBusca = ""; resultadosAtuais = []; selecionado = -1; desenharResultados(); return; }
+    timer = setTimeout(async () => {
+      if (!naNuvem) {
+        erroBusca = "";
+        resultadosAtuais = buscar(q, espacos);
+      } else {
+        const seq = ++seqBusca;
+        buscando = true; erroBusca = ""; desenharResultados();
+        const r = await buscarNaNuvem(q, outros ? "outros" : "nucleo", 60, espacos);
+        if (seq !== seqBusca) return;                       // chegou resposta de uma busca antiga
+        buscando = false;
+        resultadosAtuais = r.ok ? r.itens : [];
+        erroBusca = r.ok ? "" : r.motivo;
+      }
       selecionado = resultadosAtuais.length ? 0 : -1;
       desenharResultados();
-    }, 120);
+    }, naNuvem ? 320 : 120);
   };
   $("#opt-espacos").onchange = caixa.oninput;
+  $("#opt-outros").onchange = () => { caixa.oninput(); caixa.focus(); };
+  /* o banco terminou de chegar: a mesma busca passa a ser local */
+  aoMudarBanco = () => {
+    if (!caixa.isConnected) { aoMudarBanco = null; return; }
+    modoBusca();
+    if (caixa.value.trim() && !$("#opt-outros").checked) caixa.oninput();
+  };
+  modoBusca();
   caixa.onkeydown = (e) => {
     if (e.key === "ArrowDown") { selecionado = Math.min(selecionado + 1, resultadosAtuais.length - 1); desenharResultados(); e.preventDefault(); }
     if (e.key === "ArrowUp")   { selecionado = Math.max(selecionado - 1, 0); desenharResultados(); e.preventDefault(); }
@@ -2335,9 +2715,10 @@ function telaEditor(app, id) {
     salvar(); desenharFolha();
     caixa.select();
   }
-  $("#btn-avulso").onclick = () => {
+  $("#btn-avulso").onclick = async () => {
     if (travada()) { avisarTrava(); return; }
-    const d = prompt("Descrição do item avulso:");
+    const d = await perguntar("Item avulso (S/ CÓD.)", "Descrição do item", "", { obrigatorio: true, ph: "Ex.: SUPORTE ESPECIAL CONFORME DESENHO",
+      ajuda: "Use só quando o item não existe no banco (nem em “Buscar outros”)." });
     if (!d) return;
     const base = { codigo: "S/ CÓD.", descricao: d.trim().toUpperCase(), un: "pç", preco: 0 };
     const ph = precoLembrado(base);
@@ -2795,7 +3176,8 @@ function carregarRecursosPdf() {
     if (!window.PDFLib) await carregarScript(LIBS_PDF.pdflib);
     if (!window.fontkit) await carregarScript(LIBS_PDF.fontkit).catch(() => {});   // sem ela: Helvetica
     const ler = (u) => fetch(u).then(r => r.ok ? r.arrayBuffer() : null).catch(() => null);
-    const [reg, neg] = await Promise.all([ler("fontes/RQSans-Regular.ttf"), ler("fontes/RQSans-Bold.ttf")]);
+    const ler2 = async (n) => (await ler("fontes/" + n)) || ler(n);              // pasta fontes/ ou raiz do site
+    const [reg, neg] = await Promise.all([ler2("RQSans-Regular.ttf"), ler2("RQSans-Bold.ttf")]);
     return { reg, neg };
   })().catch(e => { recursosPdf = null; throw e; });
   return recursosPdf;
@@ -3317,7 +3699,7 @@ function telaHistorico(app) {
 const BC_PAGINA = 30;
 const BC_SALVAS = "rq.buscasCodigos";
 const BC_PADRAO = { q: "", cod: "", codModo: "inicio", familia: "", sem: "", un: "", uso: "", sit: "", ordem: "rel",
-                    espacos: true, abrev: true, medidas: true };
+                    espacos: true, abrev: true, medidas: true, outros: false };
 
 /* Abreviações e sinônimos que NÃO são só o começo da palavra.
    (As que são começo — DISJ, TERM, PARAF, ROLAM, CONTAT… — já funcionam sozinhas.)
@@ -3536,6 +3918,8 @@ function telaBuscaCodigos(app) {
                placeholder="Ex.: 9524 — ou cole vários">
         <button class="h-limpar" id="bcl-cod" title="Limpar (Esc)" hidden>✕</button>
       </div>
+      <label class="check bc-outros" title="Itens que não são de manutenção/engenharia/adm (comida, roupa, agro, loja…) não vêm no banco do aparelho; esta opção procura só neles, direto na nuvem">
+        <input type="checkbox" id="bc-outros"> Buscar outros <small>itens fora da manutenção · direto na nuvem</small></label>
       <div class="bc-dica"><code>-palavra</code> exclui · <code>"frase exata"</code> entre aspas ·
         cole uma lista de códigos (do Excel) para conferir todos de uma vez</div>
       <details class="bc-criterios" id="bc-criterios"${painelAberto === "1" || (painelAberto == null && !movel) ? " open" : ""}>
@@ -3579,7 +3963,7 @@ function telaBuscaCodigos(app) {
 
   const inQ = $("#bc-q"), inCod = $("#bc-cod"), det = $("#bc-criterios");
   const campos = { familia: "#bc-familia", sem: "#bc-sem", un: "#bc-un", uso: "#bc-uso", sit: "#bc-sit", codModo: "#bc-codmodo", ordem: "#bc-ordem" };
-  const marcas = { espacos: "#bc-espacos", abrev: "#bc-abrev", medidas: "#bc-medidas" };
+  const marcas = { espacos: "#bc-espacos", abrev: "#bc-abrev", medidas: "#bc-medidas", outros: "#bc-outros" };
 
   function opcoesUnidade() {
     const cont = new Map();
@@ -3592,7 +3976,7 @@ function telaBuscaCodigos(app) {
   function preencher() {
     inQ.value = f.q; inCod.value = f.cod;
     for (const [k, s] of Object.entries(campos)) $(s).value = f[k];
-    for (const [k, s] of Object.entries(marcas)) $(s).checked = f[k] !== false;
+    for (const [k, s] of Object.entries(marcas)) $(s).checked = k === "outros" ? !!f.outros : f[k] !== false;
   }
   const nAtivos = () => ["familia", "sem"].filter(k => f[k].trim()).length
     + ["un", "uso", "sit"].filter(k => f[k]).length + (f.codModo !== "inicio") + (f.ordem !== "rel")
@@ -3606,12 +3990,12 @@ function telaBuscaCodigos(app) {
       + s.map((b, i) => `<span class="bc-salva"><button data-salva="${i}" title="Aplicar esta busca">★ ${esc(b.nome)}</button><button class="bc-salva-x" data-apagar="${i}" title="Apagar esta busca salva">✕</button></span>`).join("")
       + `<button class="bc-salvar" id="bc-salvar" ${bcSemCriterio(f) && !nAtivos() ? "disabled" : ""} title="Guarda os critérios atuais com um nome (neste navegador)">☆ Salvar esta busca</button>`;
   }
-  $("#bc-salvas").onclick = (e) => {
+  $("#bc-salvas").onclick = async (e) => {
     const b = e.target.closest("button"); if (!b) return;
     const s = salvas();
     if (b.id === "bc-salvar") {
       const sug = curto(f.q || f.familia || f.cod || "Minha busca", 30);
-      const nome = (prompt("Nome para esta busca:", sug) || "").trim();
+      const nome = await perguntar("Salvar esta busca", "Nome", sug, { obrigatorio: true });
       if (!nome) return;
       const i = s.findIndex(x => x.nome.toLowerCase() === nome.toLowerCase());
       const reg = { nome: curto(nome, 40), f: { ...f } };
@@ -3620,7 +4004,7 @@ function telaBuscaCodigos(app) {
       desenharSalvas(); toast(`★ Busca “${reg.nome}” salva.`);
     } else if (b.dataset.apagar != null) {
       const x = s[+b.dataset.apagar];
-      if (x && confirm(`Apagar a busca salva “${x.nome}”?`)) { s.splice(+b.dataset.apagar, 1); LS.gravar(BC_SALVAS, s); desenharSalvas(); }
+      if (x && await confirmar({ titulo: "Apagar a busca salva?", perigo: true, ok: "Apagar", texto: `★ <strong>${esc(x.nome)}</strong>` })) { s.splice(+b.dataset.apagar, 1); LS.gravar(BC_SALVAS, s); desenharSalvas(); }
     } else if (b.dataset.salva != null) {
       const x = s[+b.dataset.salva]; if (!x) return;
       Object.assign(f, BC_PADRAO, x.f || {});
@@ -3653,7 +4037,7 @@ function telaBuscaCodigos(app) {
     const hl = R ? R.Ps.map(P => bcTrecho(it, P, f)).filter(Boolean) : [];
     return `<tr class="${it.a ? "" : "bc-inativo"}">
       <td class="bc-cod"><button class="bc-copiar" data-copiar="${k}" title="Copiar o código ${esc(it.c)}">${codHtml(it.c, c1)}<span class="bc-ico" aria-hidden="true">⧉</span></button></td>
-      <td class="bc-desc">${marcarTermos(it.d, hl)}${it.a ? "" : ' <span class="badge-inativo">DESATIVADO</span>'}</td>
+      <td class="bc-desc">${marcarTermos(it.d, hl)}${it.a ? "" : ' <span class="badge-inativo">DESATIVADO</span>'}${it.outros ? ' <span class="badge-outros" title="Fora do banco de manutenção">OUTROS</span>' : ""}</td>
       <td class="bc-un">${esc(it.u)}</td>
       <td class="bc-preco num">${precoHtml(it.c)}</td>
       <td class="bc-uso">${usoHtml(r.u)}</td>
@@ -3668,7 +4052,10 @@ function telaBuscaCodigos(app) {
     linhasVis = todas.slice(0, pagina * BC_PAGINA);
     const c1 = !lista ? (bcCodigos(f.cod)[0] || "") : "";
     $("#bc-corpo").innerHTML = linhasVis.map((r, k) => linha(r, k, c1)).join("")
-      || `<tr><td colspan="6" class="h-vazio">${!BANCO.length
+      || `<tr><td colspan="6" class="h-vazio">${R && R.online && R.carregando
+          ? "Buscando na nuvem…"
+          : R && R.online && R.erro ? esc(R.erro)
+          : !BANCO.length && !(R && R.online)
           ? "O banco de itens ainda está carregando…"
           : R && R.vazio
             ? `Nenhum código usado ainda nas requisições da ${UNOME}. Digite acima para procurar nos itens do banco.`
@@ -3681,6 +4068,19 @@ function telaBuscaCodigos(app) {
     $("#bc-copiar-tudo").hidden = !tot;
   }
   function resumo() {
+    const nuvem = R && R.online
+      ? `<div class="bc-nuvem">🌐 ${f.outros ? "<strong>Buscar outros</strong>: só itens fora da manutenção, direto na nuvem"
+          : "Busca on-line enquanto o banco baixa neste aparelho"} — até 200 resultados, sem abreviações.</div>` : "";
+    if (R && R.online) {
+      if (R.carregando) return nuvem;
+      if (lista) {
+        const ach = lista.filter(r => !r.falta).length, falta = lista.length - ach;
+        return nuvem + `Conferência de lista: <strong>${lista.length}</strong> código(s) · <strong>${ach}</strong> encontrado(s)`
+          + (falta ? ` · <strong class="bc-alerta">${falta} não encontrado(s)</strong>` : " · todos no banco ✔");
+      }
+      if (R.vazio) return nuvem + `Mostrando os códigos já usados nas requisições da ${UNOME}. Digite acima para procurar.`;
+      return nuvem + `<strong>${R.res.length.toLocaleString("pt-BR")}</strong> código(s) encontrado(s)` + (R.res.length >= 200 ? " — refine para ver outros" : "");
+    }
     if (!BANCO.length) return "Carregando o banco de itens…";
     if (lista) {
       const ach = lista.filter(r => !r.falta).length, falta = lista.length - ach;
@@ -3713,23 +4113,70 @@ function telaBuscaCodigos(app) {
     $("#bc-cod").closest(".h-campo").classList.toggle("bc-lista", tk.length > 1);
     $("label[for=bc-cod]").textContent = tk.length > 1 ? `Código · lista de ${tk.length}` : "Código";
   }
+  /* na nuvem: banco ainda baixando ou "Buscar outros" (critérios simples, sem abreviações) */
+  let seqNuvem = 0;
+  async function atualizarNaNuvem(uso) {
+    const seq = ++seqNuvem;
+    const tk = norm(f.cod).split(/[\s,;|]+/).filter(Boolean);
+    lista = null;
+    R = { res: [], fams: new Map(), uns: new Map(), Ps: [], nBase: 0, vazio: false, online: true, carregando: true };
+    pagina = 1; $("#bc-resumo").innerHTML = resumo(); desenhar();
+    if (!f.outros && bcSemCriterio(f)) {                         // sem critério: os já usados (nomes do histórico)
+      const res = [...uso].map(([c, u]) => ({ it: itemDoBanco(c, u.nome || "", "", 1), s: 0, u })).sort((a, b) => b.u.n - a.u.n);
+      if (seq !== seqNuvem) return;
+      R = { res, fams: new Map(), uns: new Map(), Ps: [], nBase: res.length, vazio: true, online: true };
+    } else if (tk.length > 1) {                                  // lista colada: confere os códigos direto na tabela
+      let rows = [], erro = "";
+      if (!sb) erro = "Busca na nuvem indisponível no modo local.";
+      else {
+        const r = await sb.from("req_itens").select("codigo,descricao,un,ativo,escopo").in("codigo", tk.slice(0, 500));
+        if (r.error) erro = r.error.message; else rows = r.data || [];
+      }
+      if (seq !== seqNuvem) return;
+      const mapa = new Map(rows.map(x => [String(x.codigo), x]));
+      lista = [...new Set(tk)].map(c => { const x = mapa.get(c);
+        return x ? { it: Object.assign(itemDoBanco(c, x.descricao, x.un, x.ativo ? 1 : 0), { outros: x.escopo === "outros" }), u: uso.get(c) } : { falta: c, u: uso.get(c) }; });
+      R = { res: [], fams: new Map(), uns: new Map(), Ps: [], nBase: 0, vazio: false, online: true, erro };
+    } else {
+      const { inc, exc } = bcLerTermos(f.q);
+      const termos = [...inc.map(t => t.includes(" ") ? t.split(" ") : [t]).flat(), ...(tk[0] ? [tk[0]] : []),
+                      ...(norm(f.familia).trim() ? [norm(f.familia).trim()] : []),
+                      ...[...exc, ...norm(f.sem).split(/[\s,;]+/).filter(Boolean)].map(t => "-" + t)];
+      const r = await buscarNaNuvem(termos.join(" "), f.outros ? "outros" : (f.sit === "inativos" ? "outros" : "nucleo"), 200, f.espacos !== false);
+      if (seq !== seqNuvem) return;
+      const fam = norm(f.familia).trim();
+      let res = (r.ok ? r.itens : []).filter(it => (!fam || it.n.startsWith(fam)) && (!f.un || bcUn(it) === f.un)
+        && (f.sit !== "ativos" || it.a) && (f.sit !== "inativos" || !it.a))
+        .map((it, k) => ({ it, s: k, u: uso.get(it.c) }))
+        .filter(x => !f.uso || (f.uso === "usados" ? x.u : f.uso === "preco" ? precos["C:" + x.it.c] : !(x.u || precos["C:" + x.it.c])));
+      const cmp = { uso: (a, b) => (b.u ? b.u.n : 0) - (a.u ? a.u.n : 0) || a.s - b.s, cod: (a, b) => bcColl.compare(a.it.c, b.it.c),
+                    desc: (a, b) => bcColl.compare(a.it.d, b.it.d) }[f.ordem];
+      if (cmp) res.sort(cmp);
+      R = { res, fams: new Map(), uns: new Map(), Ps: inc.map(t => bcPrepTermo(t, f)), nBase: res.length, vazio: false, online: true, erro: r.ok ? "" : r.motivo };
+    }
+    pagina = 1;
+    $("#bc-resumo").innerHTML = resumo();
+    desenhar();
+  }
   function atualizar() {
     travas();
     const uso = bcUsoNaUnidade();
+    $("#bc-total").textContent = BANCO.length ? `${BANCO.length.toLocaleString("pt-BR")} itens no banco` : (BANCO_EST.baixando ? "banco baixando…" : "banco carregando…");
+    try { sessionStorage.setItem("rq.codigos", JSON.stringify(f)); } catch { /* sem sessão */ }
+    if (f.outros || !bancoPronto()) { desenharSalvas(); atualizarNaNuvem(uso); return; }
+    seqNuvem++;
     const tk = bcCodigos(f.cod);
     lista = tk.length > 1 ? bcConferir(tk, uso) : null;
     R = lista ? { res: [], fams: new Map(), uns: new Map(), Ps: [], nBase: 0, vazio: false } : bcBuscar(f, uso);
     pagina = 1;
-    $("#bc-total").textContent = BANCO.length ? `${BANCO.length.toLocaleString("pt-BR")} itens no banco` : "banco carregando…";
     $("#bc-resumo").innerHTML = resumo();
     desenhar();
     desenharSalvas();
-    try { sessionStorage.setItem("rq.codigos", JSON.stringify(f)); } catch { /* sem sessão */ }
   }
 
   /* ---------- eventos ---------- */
   let timer = null;
-  const depois = () => { clearTimeout(timer); timer = setTimeout(atualizar, 140); };
+  const depois = () => { clearTimeout(timer); timer = setTimeout(atualizar, (f.outros || !bancoPronto()) ? 350 : 140); };
   inQ.oninput = () => { f.q = inQ.value; travas(); depois(); };
   inCod.oninput = () => { f.cod = inCod.value; travas(); depois(); };
   /* lista colada do Excel: quebras de linha e tabulações viram espaço (o campo apagaria as quebras) */
@@ -3815,6 +4262,48 @@ function baixarBlob(blob, nome) {
 /* ============================================================
    Modais: banco e backup
    ============================================================ */
+/* painel "Banco de itens": o que está neste aparelho, o que está na nuvem e o pacote publicado */
+async function atualizarPainelBanco() {
+  const el = $("#painel-banco"); if (!el) return;
+  const aqui = BANCO_EST.baixando
+    ? `baixando ${Math.round(BANCO_EST.pct * 100)}% — enquanto isso a busca é on-line`
+    : bancoPronto() ? `<strong>${BANCO.length.toLocaleString("pt-BR")}</strong> itens de manutenção${BANCO_EST.origem ? " · " + esc(BANCO_EST.origem) : ""}`
+    : esc(BANCO_EST.erro || "ainda não baixado");
+  el.innerHTML = `<div class="pb-linha"><span class="pb-rot">Neste aparelho</span><span>${aqui}</span></div>
+    ${sb ? `<div class="pb-linha"><span class="pb-rot">Na nuvem</span><span id="pb-nuvem">consultando…</span></div>
+    <div class="pb-linha"><span class="pb-rot">Pacote dos celulares</span><span id="pb-pacote">—</span></div>
+    <p class="pb-nota">No aparelho fica só o banco de <strong>manutenção, engenharia e adm</strong>. Comida, roupa, agro, itens de loja e desativados
+      ficam na nuvem e aparecem com <strong>Buscar outros</strong>. Item “outros” que entra numa RM passa sozinho para o banco de manutenção.</p>
+    <div class="pb-acoes"><button class="btn sec" id="pb-rebaixar">↻ Baixar de novo neste aparelho</button>
+      <button class="btn sec" id="pb-publicar" title="Gera o pacote compacto com o banco atual (use depois de mudar as regras no Supabase)">Publicar pacote agora</button></div>
+    <div id="pb-msg" class="progresso" hidden></div>` : ""}`;
+  if (!sb) return;
+  $("#pb-rebaixar").onclick = async () => {
+    if (!await confirmar({ titulo: "Baixar o banco de novo?", icone: "↻", ok: "Baixar de novo",
+      texto: "Apaga a cópia deste aparelho e baixa o pacote atual (alguns MB). Enquanto baixa, a busca funciona on-line." })) return;
+    await IDB.apagar("banco3").catch(() => {}); BANCO = []; avisarBancoMudou();
+    carregarBanco(true); atualizarPainelBanco();
+  };
+  $("#pb-publicar").onclick = async () => {
+    const msg = $("#pb-msg"); msg.hidden = false; msg.textContent = "Pedindo o pacote novo à nuvem…";
+    $("#pb-publicar").disabled = true;
+    try {
+      const m = await publicarPacote((t) => { msg.textContent = t; });
+      msg.innerHTML = `✓ Pacote publicado: ${(m.total || 0).toLocaleString("pt-BR")} itens (${fmtBytes(m.bytes)}). Os aparelhos baixam a versão nova ao abrir o app.`;
+      carregarBanco(); setTimeout(atualizarPainelBanco, 1500);
+    } catch (e) { msg.textContent = "Não foi possível publicar agora: " + e.message; }
+    finally { const b = $("#pb-publicar"); if (b) b.disabled = false; }
+  };
+  try {
+    const { data, error } = await sb.rpc("req_itens_resumo");
+    const nv = $("#pb-nuvem"), pc = $("#pb-pacote"); if (!nv) return;
+    if (error) { nv.textContent = semFuncao(error) ? "funções novas ainda não instaladas no banco" : error.message; return; }
+    const f = (n) => (+n || 0).toLocaleString("pt-BR");
+    nv.innerHTML = `<strong>${f(data.nucleo)}</strong> de manutenção · <strong>${f(data.outros)}</strong> outros <small>(${f(data.desativados)} desativados)</small> · ${f(data.usados)} já usados em RM`;
+    const pac = data.pacote;
+    pc.innerHTML = pac ? `${f(pac.total)} itens · ${fmtBytes(pac.bytes)} compactado · ${esc(dataHoraBR(pac.gerado_em))}` : "ainda não publicado (os aparelhos baixam em trechos)";
+  } catch (e) { const nv = $("#pb-nuvem"); if (nv) nv.textContent = e.message; }
+}
 function ligarModais() {
   const abrir = (m) => { m.hidden = false; };
   const fechar = (m) => { m.hidden = true; };
@@ -3823,7 +4312,8 @@ function ligarModais() {
       if (e.target === m || e.target.closest("[data-fechar]")) fechar(m);
     });
   });
-  $("#btn-importar-banco").onclick = () => abrir($("#modal-banco"));
+  $("#btn-importar-banco").onclick = () => { abrir($("#modal-banco")); atualizarPainelBanco(); };
+  $$("#modal-banco .so-local").forEach(el => { el.hidden = !!sb; });
   $("#btn-baixar-banco").onclick = baixarBancoJson;
   $("#btn-backup").onclick = () => abrir($("#modal-backup"));
 
@@ -3853,11 +4343,13 @@ function ligarModais() {
     try {
       const j = JSON.parse(await f.text());
       const doArquivo = valorUnidade(j.unidade);
-      if (doArquivo && doArquivo !== UN && !confirm(`Este backup é da ${nomeUnidade(doArquivo)}. Importar mesmo assim para a ${UNI().nome}?`)) return;
+      if (doArquivo && doArquivo !== UN && !await confirmar({ titulo: "Backup de outra unidade", icone: "⚠", ok: "Importar mesmo assim",
+        texto: `Este backup é da <strong>${esc(nomeUnidade(doArquivo))}</strong>. Importar para a <strong>${esc(UNI().nome)}</strong>?` })) return;
       if (!j || typeof j !== "object") throw new Error("conteúdo inesperado");
-      if (!confirm(sb
-        ? `Importar backup? As listas e projetos do arquivo entram na ${UNI().nome} e substituem os de mesmo código. O que não está no arquivo continua como está.`
-        : `Importar backup? Isso SUBSTITUI as listas e projetos da ${UNI().nome} neste navegador (a outra unidade não é afetada). Os preços do arquivo entram na memória de preços.`)) return;
+      if (!await confirmar({ titulo: "Importar backup?", icone: "💾", ok: "Importar", perigo: !sb,
+        texto: sb
+        ? `As listas e projetos do arquivo entram na <strong>${esc(UNI().nome)}</strong> e substituem os de mesmo código. O que não está no arquivo continua como está.`
+        : `Isso <strong>substitui</strong> as listas e projetos da ${esc(UNI().nome)} neste navegador (a outra unidade não é afetada). Os preços do arquivo entram na memória de preços.` })) return;
       const daOutra = (arr) => new Set(arr.filter(x => unidadeDoRegistro(x) !== UN).map(x => x.id));
       const idsP = daOutra(projetos), idsL = daOutra(listas);
       const novosP = (Array.isArray(j.projetos) ? j.projetos : []).map(p => normalizarProjeto({ ...p, unidade: UN })).filter(p => p && !idsP.has(p.id));
@@ -3877,8 +4369,8 @@ function ligarModais() {
         for (const l of novasL) await nuvemSalvarLista(l);
         for (const [chave, reg] of Object.entries(j.precos || {})) await nuvemSalvarPreco(chave, reg);
       }
-      alert("Backup importado" + (sb ? " e enviado para a nuvem." : "."));
-    } catch (err) { alert("Arquivo inválido: " + err.message); }
+      toast("💾 Backup importado" + (sb ? " e enviado para a nuvem." : "."));
+    } catch (err) { toast("Arquivo inválido: " + err.message); }
     e.target.value = "";
   };
 }
@@ -3905,7 +4397,10 @@ function limparDadosLocais() {
 }
 async function sair() {
   if (editorAtivo) await editorAtivo.commit();
-  if (sb && pendentes.size && !confirm(`Há ${pendentes.size} requisição(ões) com alterações que ainda não foram enviadas para a nuvem.\n\nSair mesmo assim? Essas alterações serão perdidas.`)) return;
+  if (sb && pendentes.size && !await confirmar({ titulo: "Sair com alterações não enviadas?", icone: "⚠", perigo: true, ok: "Sair mesmo assim",
+    texto: `Há <strong>${pendentes.size}</strong> requisição(ões) com alterações que ainda não foram enviadas para a nuvem. Saindo agora, elas serão perdidas.` })) return;
+  if (!(sb && pendentes.size) && !await confirmar({ titulo: "Sair da conta?", icone: "↩", ok: "Sair",
+    texto: "Os dados guardados neste aparelho são apagados; ao entrar de novo, tudo volta da nuvem." })) return;
   LS.fechado = true;
   limparDadosLocais();
   if (sb) { try { await sb.auth.signOut(); } catch { /* sai de qualquer forma */ } }
@@ -4013,6 +4508,8 @@ window.addEventListener("unhandledrejection", (e) => avisarErro(e.reason));
 /* ---------------- inicialização ---------------- */
 ligarModais();
 $("#btn-sair").onclick = sair;
+$("#btn-ajuda").onclick = abrirAjuda;
+$("#btn-mais").onclick = abrirMenuMais;
 if (CFG.url && CFG.anonKey && !sb) {
   /* a nuvem está configurada mas a biblioteca de conexão não carregou: NÃO cai no modo local (gravaria só neste computador) */
   $("#app").innerHTML = `<div class="vazio" style="margin:40px auto;max-width:560px"><strong>Não foi possível conectar à nuvem.</strong><br>
@@ -4024,8 +4521,11 @@ if (CFG.url && CFG.anonKey && !sb) {
   if (!sb) render();                          // modo local: abre com o que está neste navegador
   ligarLogin(() => {                          // na nuvem, nada aparece antes do login
     render();                                 // cache local na hora, já na unidade do usuário
-    carregarBanco();
-    sincronizar(true);                        // 1ª carga: traz tudo da nuvem e redesenha
+    const primeira = sincronizar(true);       // 1ª carga: traz tudo da nuvem e redesenha
+    /* almoxarifado não precisa do banco de itens no aparelho; sem saber ainda quem é (1º acesso), espera os cadastros */
+    const iniciarBanco = () => { if (!ehAlmox()) carregarBanco(); else mostrarBanco(true); };
+    if (usuarioAtual) iniciarBanco(); else primeira.then(iniciarBanco, iniciarBanco);
+    gmCarregar().then(() => { if (GM.tela) GM.tela(); });
     ligarSincronia();                         // tempo real + conferência periódica
     mostrarSinc();
   });

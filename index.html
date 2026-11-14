@@ -2,7 +2,8 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#e51a41">
 <!-- Política de segurança: só roda código deste site e das duas bibliotecas fixadas abaixo;
      nenhum script embutido em página ou em dado é executado; conexões só com o Supabase. -->
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https://*.supabase.co wss://*.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'">
@@ -13,6 +14,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="ui.css">
 <!-- Bibliotecas externas: versão fixa + assinatura (integrity). Se o arquivo no servidor for trocado, o navegador recusa. -->
 <!-- SheetJS: leitura do .xlsx do banco de dados direto no navegador -->
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"
@@ -21,6 +23,8 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.119.0/dist/umd/supabase.js"
         integrity="sha384-uteMfOloLDGt042uDz+xHGF3ym63/WQ6rFq7murQRG8Ih7QrXGEGNtWd8688sb4O" crossorigin="anonymous"></script>
 <script src="config.js"></script>
+<script src="ui.js"></script>
+<script src="materiais.js"></script>
 </head>
 <body>
 
@@ -46,26 +50,37 @@
     <a href="#/" class="nav-link">Início</a>
     <a href="#/codigos" class="nav-link" title="Procurar códigos no banco de itens — termos, abreviações, família, unidade, lista colada">Busca de códigos</a>
     <a href="#/historico" class="nav-link" title="Todos os itens já lançados nas requisições, com preços — filtro por código ou nome">Histórico por item</a>
-    <button id="btn-importar-banco" class="btn sec" title="Importar/atualizar o banco de itens (.xlsx da empresa)">Banco de itens</button>
-    <a class="btn sec" href="#/cadastros" style="text-decoration:none" title="Assinantes e setores">Cadastros</a>
-    <a class="btn sec" href="#/arquivados" style="text-decoration:none" title="Projetos concluídos">📦 Arquivados</a>
-    <button id="btn-backup" class="btn sec" title="Exportar/importar backup das listas">Backup</button>
-    <button id="btn-sair" class="btn sec" hidden title="Sair da conta">Sair</button>
+    <a href="#/materiais" class="nav-link nav-gm" title="OS do Sadege, OC, previsões e listas de separação para o almoxarifado">Gestão de Materiais</a>
+    <button id="btn-mais" class="nav-link nav-mais" type="button" title="Banco de itens, cadastros, arquivados, backup, sair">Mais ▾</button>
+    <span class="nav-sec" hidden>
+      <button id="btn-importar-banco" class="btn sec" title="Importar/atualizar o banco de itens (.xlsx da empresa)">Banco de itens</button>
+      <a class="btn sec" href="#/cadastros" title="Assinantes e setores">Cadastros</a>
+      <a class="btn sec" href="#/arquivados" title="Projetos concluídos">📦 Arquivados</a>
+      <button id="btn-backup" class="btn sec" title="Exportar/importar backup das listas">Backup</button>
+      <button id="btn-sair" class="btn sec" hidden title="Sair da conta">Sair</button>
+    </span>
   </nav>
   <div id="status-banco" class="status-banco">banco: carregando…</div>
   <button id="status-sinc" class="status-sinc" hidden></button>
+  <button id="btn-ajuda" class="btn-ajuda" title="Ajuda e dicas desta tela" aria-label="Ajuda">?</button>
+  <div id="barra-banco" class="barra-banco" hidden aria-hidden="true"></div>
 </header>
 
 <main id="app"></main>
+<nav id="nav-movel" class="nav-movel no-print" aria-label="Menu"></nav>
 
 <!-- ===== Modal: importar banco ===== -->
 <div id="modal-banco" class="modal no-print" hidden>
   <div class="modal-caixa">
     <h2>Banco de itens</h2>
-    <p>Selecione o arquivo <strong>.xlsx</strong> exportado do sistema da empresa (aba <em>RelacaoDeProdutos</em>). A carga <strong>mescla</strong> com o banco atual: adiciona itens novos, atualiza descrições/unidades dos existentes e <strong>desativa</strong> os que não constam mais.</p>
-    <input type="file" id="arquivo-banco" accept=".xlsx,.xlsm,.json">
-    <p style="margin-top:14px">Para o banco valer <strong>em todos os computadores</strong>, baixe o resultado da mesclagem e substitua o arquivo <code>dados/banco.json</code> no repositório do site:</p>
-    <button class="btn sec" id="btn-baixar-banco">⬇ Baixar banco.json (para publicar no site)</button>
+    <div id="painel-banco" class="painel-banco"></div>
+    <details class="banco-importar">
+      <summary>Atualizar o banco com a planilha da empresa (.xlsx)</summary>
+      <p>Selecione o arquivo <strong>.xlsx</strong> exportado do sistema da empresa (aba <em>RelacaoDeProdutos</em>). A carga <strong>mescla</strong> com o banco atual: adiciona itens novos, atualiza descrições/unidades dos existentes e <strong>remove</strong> os que não constam mais. No fim, o pacote dos celulares é gerado de novo.</p>
+      <input type="file" id="arquivo-banco" accept=".xlsx,.xlsm,.json">
+      <p class="so-local" style="margin-top:14px">Para o banco valer <strong>em todos os computadores</strong>, baixe o resultado da mesclagem e substitua o arquivo <code>dados/banco.json</code> no repositório do site:</p>
+      <button class="btn sec so-local" id="btn-baixar-banco">⬇ Baixar banco.json (para publicar no site)</button>
+    </details>
     <div id="progresso-banco" class="progresso" hidden></div>
     <div class="modal-acoes">
       <button class="btn sec" data-fechar>Fechar</button>
