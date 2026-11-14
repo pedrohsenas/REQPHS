@@ -14,6 +14,7 @@
   /* etapas dos materiais */
   --et-aguardando:#c77700; --et-aguardando-s:#fff3dc;
   --et-comprado:#2f6db3;   --et-comprado-s:#e6effa;
+  --et-recebido:#4651c4;   --et-recebido-s:#eceefc;
   --et-separacao:#7a4cc4;  --et-separacao-s:#f0eafb;
   --et-separado:#0d8580;   --et-separado-s:#e0f4f2;
   --et-entregue:#1f7a45;   --et-entregue-s:#e6f4ec;
@@ -167,12 +168,13 @@ table.app th{background:#4a494b}
 .et-chip{display:inline-block; font-size:11px; font-weight:700; border-radius:20px; padding:2px 9px; white-space:nowrap; border:1px solid transparent}
 .et-chip.et-aguardando{background:var(--et-aguardando-s); color:var(--et-aguardando)}
 .et-chip.et-comprado{background:var(--et-comprado-s); color:var(--et-comprado)}
+.et-chip.et-recebido{background:var(--et-recebido-s); color:var(--et-recebido)}
 .et-chip.et-separacao{background:var(--et-separacao-s); color:var(--et-separacao)}
 .et-chip.et-separado{background:var(--et-separado-s); color:var(--et-separado)}
 .et-chip.et-entregue{background:var(--et-entregue-s); color:var(--et-entregue)}
 .et-chip.et-cancelado{background:var(--et-cancelado-s); color:var(--et-cancelado); text-decoration:line-through}
 .et-atraso{color:var(--vermelho); margin-left:4px; font-weight:800}
-i.et-aguardando{background:var(--et-aguardando)} i.et-comprado{background:var(--et-comprado)} i.et-separacao{background:var(--et-separacao)}
+i.et-aguardando{background:var(--et-aguardando)} i.et-comprado{background:var(--et-comprado)} i.et-recebido{background:var(--et-recebido)} i.et-separacao{background:var(--et-separacao)}
 i.et-separado{background:var(--et-separado)} i.et-entregue{background:var(--et-entregue)}
 .chip-disc{display:inline-block; font-size:10.5px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; background:var(--fundo); color:var(--grafite); border:1px solid var(--linha); border-radius:5px; padding:1px 6px; vertical-align:1px}
 .chip-disc.grande{font-size:12px; padding:3px 9px}
@@ -189,12 +191,13 @@ i.et-separado{background:var(--et-separado)} i.et-entregue{background:var(--et-e
 .gm-mini-barra i{display:block; height:100%; background:var(--et-entregue); border-radius:3px}
 
 /* quadro (kanban) */
-.gm-quadro{display:grid; grid-template-columns:repeat(5, minmax(220px, 1fr)); gap:10px; align-items:start}
+.gm-quadro{display:grid; grid-template-columns:repeat(6, minmax(200px, 1fr)); gap:10px; align-items:start; overflow-x:auto}
 .gm-col{background:#ecebef; border-radius:var(--raio); padding:8px; min-height:120px}
 .gm-col header{display:flex; align-items:center; gap:7px; font-size:12px; font-weight:800; letter-spacing:.04em; text-transform:uppercase; color:var(--grafite); padding:4px 4px 9px}
 .gm-col header b{margin-left:auto; background:#fff; border-radius:20px; padding:0 8px; font-size:11.5px}
 .gm-col-ponto{width:9px; height:9px; border-radius:50%; background:currentColor}
 .gm-col.et-aguardando .gm-col-ponto{color:var(--et-aguardando)} .gm-col.et-comprado .gm-col-ponto{color:var(--et-comprado)}
+.gm-col.et-recebido .gm-col-ponto{color:var(--et-recebido)}
 .gm-col.et-separacao .gm-col-ponto{color:var(--et-separacao)} .gm-col.et-separado .gm-col-ponto{color:var(--et-separado)}
 .gm-col.et-entregue .gm-col-ponto{color:var(--et-entregue)}
 .gm-col-cards{display:flex; flex-direction:column; gap:8px}
@@ -300,6 +303,20 @@ body.com-lote .toast{bottom:84px}
 .gm-os-op small{display:block; color:var(--cinza); font-size:12px}
 .gm-os-nenhuma{padding:14px; color:var(--cinza); font-size:13px; text-align:center}
 .gm-os-nova{align-self:flex-start}
+/* escolha de OC (mesmo visual da escolha de OS) */
+.gm-oc-escolha{display:flex; flex-direction:column; gap:8px}
+.gm-oc-busca{width:100%}
+.gm-oc-lista{border:1px solid var(--linha); border-radius:var(--raio-mini); max-height:34vh; overflow:auto}
+.gm-oc-op{display:flex; gap:10px; align-items:flex-start; padding:9px 11px; border-bottom:1px solid var(--fundo); cursor:pointer; font-size:13.5px; line-height:1.35}
+.gm-oc-op[hidden]{display:none}
+.gm-oc-op:hover{background:var(--fundo)}
+.gm-oc-op:has(input:checked){background:var(--et-comprado-s)}
+.gm-oc-op input{margin-top:3px; accent-color:var(--et-comprado)}
+.gm-oc-op small{display:block; color:var(--cinza); font-size:12px}
+.gm-oc-nova{align-self:flex-start}
+.gm-oc-itens{display:flex; flex-wrap:wrap; gap:5px; margin:0 0 12px}
+.gm-oc-itens span{font-size:12px; background:var(--fundo); border-radius:5px; padding:2px 7px; color:var(--grafite)}
+.gm-vinc-extra .gm-oc-escolha{margin-top:10px}
 .gm-vinc-extra{margin-top:14px}
 .gm-vinc-extra summary{cursor:pointer; display:flex; align-items:center; gap:10px; font-weight:700; font-size:14.5px; color:var(--grafite); list-style:none}
 .gm-vinc-extra summary::-webkit-details-marker{display:none}
@@ -457,6 +474,9 @@ body.perfil-almox .status-banco{display:none}
   /* Gestão de Materiais */
   .gm-abas{margin:-4px -12px 12px; padding:0 8px}
   .gm-filtros select{flex:1 1 45%}
+  .gm-agrupar{flex:1 1 100%}
+  .gm-agrupar button{flex:1}
+  .gm-grupo .btn.mini{display:block; margin:6px 0 0}
   .gm-quadro{display:flex; overflow-x:auto; scroll-snap-type:x mandatory; margin:0 -12px; padding:0 12px 8px; gap:10px; -webkit-overflow-scrolling:touch}
   .gm-col{flex:0 0 84vw; scroll-snap-align:start}
   .gm-v-datas{grid-template-columns:1fr}
@@ -505,6 +525,49 @@ body.perfil-almox .status-banco{display:none}
   .pb-linha{grid-template-columns:1fr}
   .os-rodape .os-autor{margin-left:0; width:100%}
 }
+
+/* ---------- OC por fornecedor ---------- */
+.oc-situ{display:inline-block; font-size:11px; font-weight:700; border-radius:20px; padding:2px 9px; white-space:nowrap; margin-left:6px; vertical-align:1px}
+.oc-situ.grande{font-size:12.5px; padding:4px 11px; margin-left:0}
+.oc-situ.situ-aberta{background:var(--et-comprado-s); color:var(--et-comprado)}
+.oc-situ.situ-parcial{background:var(--et-recebido-s); color:var(--et-recebido)}
+.oc-situ.situ-recebida{background:var(--et-entregue-s); color:var(--et-entregue)}
+.oc-situ.situ-vazia, .oc-situ.situ-cancelada{background:var(--et-cancelado-s); color:var(--et-cancelado)}
+.oc-cartao{text-decoration:none; color:var(--tinta); border-left-color:var(--et-comprado)}
+.oc-cartao.situ-parcial{border-left-color:var(--et-recebido)}
+.oc-cartao.situ-recebida{border-left-color:var(--et-entregue); background:#fbfdfb}
+.oc-cartao.situ-vazia{border-left-style:dashed; border-left-color:var(--cinza-claro)}
+.oc-cartao.situ-cancelada{opacity:.6}
+.oc-cartao.com-atraso{border-left-color:var(--vermelho); box-shadow:inset 0 0 0 1px #f3c2ca, var(--sombra)}
+.oc-cartao .sep-prog .gm-mini-barra i{background:var(--et-recebido)}
+.oc-forn{font-weight:700; font-size:14px; color:var(--grafite); line-height:1.3}
+.oc-cab{border-left:4px solid var(--et-comprado)}
+.oc-cab.com-atraso{border-left-color:var(--vermelho)}
+.oc-faixa{border-left-color:var(--et-aguardando)}
+.oc-faixa b{color:var(--et-aguardando)}
+.gm-grupo-oc td{box-shadow:inset 4px 0 0 var(--et-comprado)}
+.gm-grupo-oc.situ-parcial td{box-shadow:inset 4px 0 0 var(--et-recebido)}
+.gm-grupo-oc.situ-recebida td{box-shadow:inset 4px 0 0 var(--et-entregue)}
+.gm-grupo-oc.com-atraso td{box-shadow:inset 4px 0 0 var(--vermelho)}
+.gm-grupo-semoc td{background:var(--et-aguardando-s) !important; box-shadow:inset 4px 0 0 var(--et-aguardando)}
+.gm-grupo .btn.mini{margin-left:8px; vertical-align:1px}
+.gm-in.herdada{color:#3d4a8f; background:#f6f7fd; font-style:italic}
+.gm-in.oc-cancelada{text-decoration:line-through; color:var(--cinza)}
+.gm-prev-propria{color:var(--et-recebido); font-weight:700}
+.sep-meta .ok, .gm-v-desc .ok{color:var(--et-entregue); font-weight:700}
+/* alternância Por OS / Por OC */
+.seg{display:inline-flex; border:1px solid var(--linha); border-radius:var(--raio-mini); overflow:hidden; background:#fff; flex:none}
+.seg button{font:inherit; font-size:13px; font-weight:600; border:0; background:none; padding:7px 13px; color:var(--cinza); cursor:pointer}
+.seg button + button{border-left:1px solid var(--linha)}
+.seg button.ativo{background:var(--grafite); color:#fff}
+/* escolher(): opções empilhadas */
+.conf-ops{display:flex; flex-direction:column; gap:8px; margin:4px 0 12px}
+.conf-op{display:flex; flex-direction:column; align-items:flex-start; gap:2px; text-align:left; font:inherit; cursor:pointer;
+  background:#fff; border:1px solid var(--linha); border-radius:var(--raio-mini); padding:11px 13px}
+.conf-op:hover, .conf-op:focus-visible{border-color:var(--grafite); background:var(--fundo)}
+.conf-op.prim{border-color:var(--grafite)}
+.conf-op strong{font-size:14px}
+.conf-op small{font-size:12px; color:var(--cinza)}
 @media print{
   .nav-movel, .btn-ajuda, .barra-banco, .gm-acoes-lote{display:none !important}
 }

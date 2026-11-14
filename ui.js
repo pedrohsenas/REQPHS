@@ -50,6 +50,42 @@ function confirmar(opc = {}) {
   });
 }
 
+/* ---------- escolha entre opções (ex.: só este item × a OC inteira) ----------
+   opc: { titulo, texto (HTML), icone, opcoes: [{ v, rot, sub }], cancelar }
+   devolve o v escolhido, ou null */
+function escolher(opc = {}) {
+  return new Promise((resolve) => {
+    const anterior = document.activeElement;
+    const cx = document.createElement("div");
+    cx.className = "modal no-print conf";
+    cx.setAttribute("role", "alertdialog");
+    cx.setAttribute("aria-modal", "true");
+    cx.innerHTML = `<div class="modal-caixa conf-caixa">
+      <div class="conf-cab">${opc.icone ? `<span class="conf-ico" aria-hidden="true">${opc.icone}</span>` : ""}<h2>${esc(opc.titulo || "Escolha")}</h2></div>
+      ${opc.texto ? `<div class="conf-texto">${opc.texto}</div>` : ""}
+      <div class="conf-ops">${(opc.opcoes || []).map((o, i) => `<button type="button" class="conf-op${i ? "" : " prim"}" data-i="${i}">
+        <strong>${esc(o.rot)}</strong>${o.sub ? `<small>${esc(o.sub)}</small>` : ""}</button>`).join("")}</div>
+      <div class="conf-acoes"><button type="button" class="btn sec" data-i="-1">${esc(opc.cancelar || "Cancelar")}</button></div>
+    </div>`;
+    document.body.appendChild(cx);
+    const fim = (v) => {
+      cx.remove();
+      document.removeEventListener("keydown", tecla, true);
+      if (anterior && anterior.focus) try { anterior.focus(); } catch { /* sem foco */ }
+      resolve(v);
+    };
+    const tecla = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); fim(null); } };
+    document.addEventListener("keydown", tecla, true);
+    cx.addEventListener("click", (e) => {
+      if (e.target === cx) return fim(null);
+      const b = e.target.closest("[data-i]"); if (!b) return;
+      const i = +b.dataset.i;
+      fim(i < 0 ? null : opc.opcoes[i].v);
+    });
+    setTimeout(() => { const b = cx.querySelector(".conf-op"); if (b) b.focus(); }, 0);
+  });
+}
+
 /* ---------- um campo de texto ---------- */
 function perguntar(titulo, rotulo, valor = "", opc = {}) {
   return formulario(titulo, [{ nome: "v", rot: rotulo, ph: opc.ph || "", ajuda: opc.ajuda || "", attrs: opc.attrs || "" }],
@@ -128,11 +164,12 @@ const AJUDA = {
   materiais: {
     titulo: "Gestão de Materiais",
     dicas: [
-      "<strong>Fluxo:</strong> RM concluída → <strong>Vincular à OS</strong> (a RM inteira ou só alguns itens) → preencher <strong>OC, data do pedido e previsão</strong> → <strong>lista de separação</strong> para o almoxarifado → almoxarifado marca no celular → <strong>entregue</strong>.",
+      "<strong>Fluxo:</strong> RM concluída → <strong>Vincular à OS</strong> (a RM inteira ou só alguns itens) → cada item vai para a <strong>OC do fornecedor</strong> → <strong>recebido</strong> → <strong>lista de separação</strong> para o almoxarifado → <strong>entregue</strong>.",
+      "<strong>OC por fornecedor:</strong> uma OC pode ter <strong>um item só</strong> ou <strong>vários</strong>, de RMs e OS diferentes. Digite o nº da OC na linha do item: se a OC já existe, o item entra nela; se é nova, abre o cadastro (fornecedor, pedido, previsão).",
+      "Para pôr vários itens na mesma OC de uma vez: marque os itens → <strong>🧾 OC</strong>. Na aba Itens, <strong>Por OC</strong> agrupa a lista pelas OCs, com os <strong>Sem OC</strong> em cima.",
+      "A <strong>previsão</strong> é da OC e vale para todos os itens dela. Se só parte chegar depois (saldo), mude a previsão na linha e escolha <strong>Só este item</strong>.",
       "<strong>Quadro</strong>: cada cartão é uma OS do Sadege, na coluna da etapa mais atrasada dos itens dela (o gargalo). OS de projeto aparecem com a faixa do projeto e primeiro.",
-      "<strong>Itens</strong>: a lista de materiais vinculados. OC e datas se editam direto na linha. Marque vários itens para preencher OC/datas de uma vez, criar uma lista de separação ou marcar como entregues.",
-      "Uma OS pode ficar <strong>solta</strong> (sem projeto). Um projeto pode ter várias OS, uma por disciplina.",
-      "Etapas: <strong>Sem OC</strong> → <strong>Comprado</strong> (tem OC) → <strong>Em separação</strong> (lista enviada) → <strong>Separado</strong> (almoxarifado marcou) → <strong>Entregue</strong>. Previsão vencida aparece em vermelho.",
+      "Etapas: <strong>Sem OC</strong> → <strong>Comprado</strong> (tem OC) → <strong>Recebido</strong> (chegou do fornecedor) → <strong>Em separação</strong> → <strong>Separado</strong> → <strong>Entregue</strong>. ⚠ = previsão vencida e ainda não recebido.",
     ],
   },
   os: {
@@ -140,7 +177,19 @@ const AJUDA = {
     dicas: [
       "Tudo o que está vinculado a esta OS: itens, etapas, previsões e listas de separação.",
       "<strong>+ Vincular itens</strong> traz itens de outra RM concluída para esta OS.",
+      "Os itens aparecem agrupados pela <strong>OC</strong> (fornecedor). Uma OS pode depender de várias OCs; o grupo <strong>Sem OC</strong> é o que ainda falta comprar.",
       "<strong>Editar</strong> muda o nº do Sadege, a descrição, a disciplina e o projeto (ou deixa a OS solta).",
+    ],
+  },
+  oc: {
+    titulo: "Ordem de compra (OC)",
+    dicas: [
+      "A OC é emitida <strong>por fornecedor</strong>: pode ter um item só ou vários, de RMs e OS diferentes.",
+      "<strong>+ Nova OC</strong> cadastra nº, fornecedor, data do pedido e previsão. Depois, <strong>+ Itens</strong> põe nela os itens sem OC (ou traz de outra OC).",
+      "Atalho: digite o nº da OC direto na linha do item (aba Itens). Mesmo nº = mesma OC.",
+      "A <strong>previsão da OC</strong> vale para todos os itens dela. Entrega parcial: dê uma <strong>previsão própria</strong> só aos itens que chegam depois.",
+      "<strong>📥 Receber</strong> marca a chegada do fornecedor: tudo o que falta ou só os itens selecionados (entrega parcial). Dá para corrigir a data em cada linha.",
+      "<strong>Cancelar OC</strong> devolve os itens para <strong>Sem OC</strong> e guarda a OC como cancelada; <strong>Excluir</strong> apaga a OC.",
     ],
   },
   separacao: {
@@ -179,6 +228,7 @@ function rotaAjuda() {
   const h = location.hash || "#/";
   if (h.startsWith("#/lista/")) return "editor";
   if (h.startsWith("#/os/")) return "os";
+  if (h.startsWith("#/oc/") || h === "#/materiais/ocs") return "oc";
   if (h.startsWith("#/separacao/") || h === "#/materiais/separacao") return "separacao";
   if (h.startsWith("#/materiais")) return "materiais";
   if (h.startsWith("#/projeto/")) return "projeto";
@@ -214,7 +264,7 @@ function desenharMenuMovel() {
     ? [["#/materiais/separacao", "📋", "Separação"], ["#/codigos", "🔎", "Códigos"], ["ajuda", "?", "Ajuda"]]
     : [["#/", "🏠", "Início"], ["#/codigos", "🔎", "Códigos"], ["#/materiais", "📦", "Materiais"], ["#/materiais/separacao", "📋", "Separação"], ["mais", "☰", "Mais"]];
   const ativo = (href) => href === "#/" ? (h === "#/" || h === "" || h.startsWith("#/lista/") || h.startsWith("#/projeto/"))
-    : href === "#/materiais" ? (h.startsWith("#/materiais") && h !== "#/materiais/separacao") || h.startsWith("#/os/")
+    : href === "#/materiais" ? (h.startsWith("#/materiais") && h !== "#/materiais/separacao") || h.startsWith("#/os/") || h.startsWith("#/oc/")
     : href === "#/materiais/separacao" ? (h === "#/materiais/separacao" || h.startsWith("#/separacao/"))
     : h === href;
   const chave = itens.map(i => i[0]).join() + "|" + h;

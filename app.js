@@ -1664,15 +1664,17 @@ function desenharTela() {
   document.body.classList.toggle("pg-editor", h.startsWith("#/lista/"));
   $$("#topo nav a[href]").forEach(a => {
     const href = a.getAttribute("href");
-    a.classList.toggle("ativo", href === h || (href === "#/materiais" && (h.startsWith("#/materiais") || h.startsWith("#/os/") || h.startsWith("#/separacao/"))));
+    a.classList.toggle("ativo", href === h || (href === "#/materiais" && (h.startsWith("#/materiais") || h.startsWith("#/os/") || h.startsWith("#/oc/") || h.startsWith("#/separacao/"))));
   });
   desenharMenuMovel();
   if (h !== rotaAnterior) { rotaAnterior = h; window.scrollTo(0, 0); }   // tela nova começa do topo (redesenho não)
   if (h.startsWith("#/lista/"))       telaEditor(app, h.slice(8));
   else if (h === "#/materiais/itens")  telaMateriais(app, "itens");
+  else if (h === "#/materiais/ocs")    telaMateriais(app, "ocs");
   else if (h === "#/materiais/separacao") telaMateriais(app, "separacao");
   else if (h.startsWith("#/materiais")) telaMateriais(app, "quadro");
   else if (h.startsWith("#/os/"))      telaOS(app, h.slice(5));
+  else if (h.startsWith("#/oc/"))      telaOC(app, h.slice(5));
   else if (h.startsWith("#/separacao/")) telaSeparacao(app, h.slice(12));
   else if (h.startsWith("#/projeto/")) telaProjeto(app, h.slice(10));
   else if (h === "#/historico")        telaHistorico(app);
@@ -1791,7 +1793,7 @@ function telaInicio(app) {
   const faixaGM = () => {
     const el = $("#inicio-gm"); if (!el || !GM.pronto) return;
     const idx = gmIdx(); let semOC = 0, atr = 0, emSep = 0;
-    for (const m of gmMat()) { const e = gmEtapa(m, idx); if (e === "aguardando") semOC++; if (e === "separacao") emSep++; if (gmAtrasado(m, e)) atr++; }
+    for (const m of gmMat()) { const e = gmEtapa(m, idx); if (e === "aguardando") semOC++; if (e === "separacao") emSep++; if (gmAtrasado(m, e, idx)) atr++; }
     const seps = gmSep().filter(x => x.status === "enviada").length;
     if (!semOC && !atr && !emSep && !seps) { el.innerHTML = ""; return; }
     el.innerHTML = `<a class="faixa-gm" href="#/materiais/itens">📦 <strong>Gestão de Materiais</strong>
