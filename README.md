@@ -1,6 +1,6 @@
 # Requisições de Material — UIS e UIS 3
 
-Site estático (sem servidor) para criar listas de materiais a partir do banco de itens da empresa, com prévia ao vivo da requisição no formato do modelo Excel e impressão direta em PDF para assinatura digital.
+Site estático (sem servidor) para criar listas de materiais a partir do banco de itens da empresa, com prévia ao vivo da requisição no formato do modelo Excel e impressão direta em PDF para assinatura digital. Inclui a **Gestão de Materiais**: RM concluída → OS do Sadege → OC e previsão → lista de separação no celular do almoxarifado → entregue.
 
 ## Duas unidades no mesmo site
 
@@ -15,6 +15,49 @@ Site estático (sem servidor) para criar listas de materiais a partir do banco d
 ## Supabase
 
 Antes de usar as unidades na nuvem, rode **uma vez** o arquivo `supabase_unidades.sql` no SQL Editor do Supabase. Ele cria as colunas `unidade` (pessoas, setores e projetos) e não apaga nada.
+
+## Banco de itens leve no celular (núcleo × outros)
+
+- No aparelho fica só o **núcleo**: itens de manutenção, engenharia e adm (≈ 255 mil). Ficam **só na nuvem** os **outros**: comida e bebida, cortes e embalagens de frigorífico, sementes, defensivos e ração, roupa sem CA, cama/mesa/banho, cosméticos, itens de loja e todos os **desativados** (≈ 142 mil).
+- O núcleo chega como **um pacote compactado** (`.tsv.gz`, poucos MB) no Storage (`req-pacotes`), gerado pela Edge Function `pacote-itens`. Depois, só as mudanças (conferência leve por `atualizado_em`). Ao reabrir, o banco sai do próprio aparelho em ~1 s.
+- **Enquanto o pacote baixa, a busca funciona on-line** (função `req_buscar_itens`), na RM e na Busca de códigos. Aviso azul acima dos resultados.
+- **Buscar outros** (caixa na busca da RM e na Busca de códigos): procura **só** nos itens fora do núcleo, direto na nuvem. Os resultados têm o selo OUTROS.
+- Item “outros” que entra numa RM (ou ganha preço) passa **sozinho** para o núcleo, para todos.
+- As regras ficam na tabela `req_itens_regras` (expressões regulares sobre a descrição em maiúsculas e sem acento). Para ajustar: edite a tabela no Supabase, rode `select public.req_itens_reclassificar();` e depois **Banco de itens → Publicar pacote agora** (ou `select public.req_pacote_publicar();`). Ajuste fino de um item: coluna `escopo_fixo` (`nucleo`/`outros`).
+- A importação do `.xlsx` compara com o banco inteiro da nuvem e, no fim, gera o pacote novo para os celulares.
+- Se o banco ainda não tiver as funções novas, o app usa o método antigo (lista completa em páginas).
+
+## Gestão de Materiais
+
+Menu **Gestão de Materiais** (`#/materiais`). Fluxo:
+
+1. Conclua a RM e toque em **🔗 Vincular à OS** (na RM, ou em *Vincular RM à OS* na Gestão). Vincule a **RM inteira** (lote) ou só alguns itens (**picados**).
+2. Escolha a **OS do Sadege** ou crie uma nova: nº, descrição (tratada como nome do projeto), disciplina e projeto (ou **OS solta**). Um projeto pode ter várias OS, uma por disciplina.
+3. Preencha **OC, data do pedido e previsão de entrega**, direto na linha ou em lote.
+4. Monte a **lista de separação** para o almoxarifado (por RM inteira ou itens picados) e toque em **Enviar ao almoxarifado**. Sai também em **PDF** (A4, checklist) e pelo **Compartilhar** (WhatsApp, e-mail).
+5. O almoxarifado marca no celular; a engenharia vê na hora. **Concluir separação** e, quando o material sair, **Marcar entregue**.
+
+Etapas de cada item: **Sem OC → Comprado → Em separação → Separado → Entregue** (previsão vencida em vermelho). O **Quadro de OS** coloca cada OS na coluna da etapa mais atrasada dos itens dela. OS de projeto aparecem primeiro, com a faixa do projeto. A aba **Itens** é a lista operacional, com seleção em lote. O resumo do projeto mostra as OS dele.
+
+**Almoxarifado:** crie o login da pessoa (Supabase → Authentication → Add user) e cadastre-a em **Cadastros** com papel **Almoxarifado**. Ela entra direto nas listas de separação, não baixa o banco e não aparece como assinante.
+
+## Ajuda e confirmações
+
+- Botão **?** no topo: dicas da tela atual e das outras telas.
+- Toda ação que apaga, trava ou envia algo pede confirmação numa tela própria.
+- No celular: menu inferior (Início, Códigos, Materiais, Separação, Mais), painéis que sobem de baixo e alvos de toque maiores.
+
+## Scripts do Supabase (`supabase/`)
+
+| Arquivo | O que faz |
+|---|---|
+| `01_itens_nucleo_outros.sql` | colunas `busca`, `escopo`, `usado` em `req_itens`, regras, índices e promoção automática de itens usados |
+| `02_itens_busca_pacote.sql` | busca on-line, pacote em trechos, resumo, reclassificação e bucket `req-pacotes` |
+| `03_pacote_publicar.sql` | `req_pacote_publicar()` (chama a Edge Function pelo `pg_net`) |
+| `04_gestao_materiais.sql` | tabelas `req_os`, `req_mat`, `req_sep`, `req_sep_itens` e papel **almoxarifado** |
+| `functions/pacote-itens/` | Edge Function que gera o pacote `.tsv.gz` |
+
+Todos são aditivos: não apagam nem alteram dados existentes.
 
 ## Busca de códigos
 
