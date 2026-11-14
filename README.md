@@ -18,7 +18,7 @@ Antes de usar as unidades na nuvem, rode **uma vez** o arquivo `supabase_unidade
 
 ## Banco de itens leve no celular (núcleo × outros)
 
-- No aparelho fica só o **núcleo**: itens de manutenção, engenharia e adm (≈ 255 mil). Ficam **só na nuvem** os **outros**: comida e bebida, cortes e embalagens de frigorífico, sementes, defensivos e ração, roupa sem CA, cama/mesa/banho, cosméticos, itens de loja e todos os **desativados** (≈ 142 mil).
+- No aparelho fica só o **núcleo**: itens de manutenção, engenharia e adm (≈ 244 mil, pacote de ~4 MB). Ficam **só na nuvem** os **outros**: comida e bebida, cortes, embalagens e peças de frigorífico e aviário, sementes, defensivos e ração, roupa sem CA, cama/mesa/banho, cosméticos, cerveja e cigarro, itens de loja e todos os **desativados** (≈ 153 mil). Itens de soja e da UIS (óleo, farelo, lecitina, casca, etiquetas "… UIS") ficam no núcleo mesmo com código de frigorífico.
 - O núcleo chega como **um pacote compactado** (`.tsv.gz`, poucos MB) no Storage (`req-pacotes`), gerado pela Edge Function `pacote-itens`. Depois, só as mudanças (conferência leve por `atualizado_em`). Ao reabrir, o banco sai do próprio aparelho em ~1 s.
 - **Enquanto o pacote baixa, a busca funciona on-line** (função `req_buscar_itens`), na RM e na Busca de códigos. Aviso azul acima dos resultados.
 - **Buscar outros** (caixa na busca da RM e na Busca de códigos): procura **só** nos itens fora do núcleo, direto na nuvem. Os resultados têm o selo OUTROS.
@@ -55,9 +55,10 @@ Etapas de cada item: **Sem OC → Comprado → Em separação → Separado → E
 | `02_itens_busca_pacote.sql` | busca on-line, pacote em trechos, resumo, reclassificação e bucket `req-pacotes` |
 | `03_pacote_publicar.sql` | `req_pacote_publicar()` (chama a Edge Function pelo `pg_net`) |
 | `04_gestao_materiais.sql` | tabelas `req_os`, `req_mat`, `req_sep`, `req_sep_itens` e papel **almoxarifado** |
+| `05_regras_filtro_v2.sql` | regras v2 do filtro (códigos de frigorífico com número, carnes em qualquer posição, rações, varejo), com exceção para soja/UIS, e reclassificação |
 | `functions/pacote-itens/` | Edge Function que gera o pacote `.tsv.gz` |
 
-Todos são aditivos: não apagam nem alteram dados existentes.
+Os de 01 a 04 são aditivos: não apagam nem alteram dados existentes. O 05 só muda o `escopo` dos itens (núcleo/outros); itens já usados em RM nunca saem do núcleo. Todos já foram aplicados no projeto **Requisicoes**.
 
 ## Busca de códigos
 
