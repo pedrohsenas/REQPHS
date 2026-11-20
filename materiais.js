@@ -1,29 +1,35 @@
 /* ============================================================
    materiais.js — GESTÃO DE MATERIAIS
    RM concluída → itens vinculados a uma OS do Sadege (que pode
-   pertencer a um projeto ou ficar solta) → OC, data do pedido,
-   previsão de entrega → lista de separação para o almoxarifado
+   pertencer a um projeto ou ficar solta) → OC por fornecedor →
+   recebimento → lista de separação para o almoxarifado
    (checklist no celular + PDF) → entregue.
 
+   OC (req_oc) é cadastro próprio: nº, fornecedor, data do pedido e
+   previsão. Uma OC pode ter 1 item ou vários, de RMs e OS diferentes.
+   O item aponta para ela (oc_id); a previsão do item é a da OC, salvo
+   previsão própria (entrega parcial / saldo).
+
    Etapas de cada item (derivadas, sem campo de status a manter):
-     Sem OC → Comprado (tem OC) → Em separação (lista enviada)
-            → Separado (almoxarifado marcou) → Entregue
+     Sem OC → Comprado (tem OC) → Recebido (chegou do fornecedor)
+            → Em separação (lista enviada) → Separado → Entregue
    A OS fica na coluna da etapa mais atrasada dos itens dela.
 
-   Tabelas: req_os, req_mat, req_sep, req_sep_itens (ver
-   supabase/04_gestao_materiais.sql). Sem Supabase, tudo fica
-   neste navegador (localStorage), como o resto do app.
+   Tabelas: req_os, req_oc, req_mat, req_sep, req_sep_itens (ver
+   supabase/04_gestao_materiais.sql e 06_oc_fornecedor.sql). Sem
+   Supabase, tudo fica neste navegador (localStorage).
    Carregado ANTES do app.js: só declarações.
    ============================================================ */
 "use strict";
 
-const GM = { pronto: false, carregando: null, erro: "", semTabelas: false,
-             os: [], mat: [], sep: [], si: [], canal: null, tela: null, sel: new Set() };
-const GM_TAB = { os: "req_os", mat: "req_mat", sep: "req_sep", si: "req_sep_itens" };
+const GM = { pronto: false, carregando: null, erro: "", semTabelas: false, semOC: false,
+             os: [], oc: [], mat: [], sep: [], si: [], canal: null, tela: null, sel: new Set() };
+const GM_TAB = { os: "req_os", oc: "req_oc", mat: "req_mat", sep: "req_sep", si: "req_sep_itens" };
 const GM_LS = "rq.gm";
 const ETAPAS = [
   { id: "aguardando", rot: "Sem OC",       curto: "Sem OC" },
   { id: "comprado",   rot: "Comprado",     curto: "Comprado" },
+  { id: "recebido",   rot: "Recebido",     curto: "Recebido" },
   { id: "separacao",  rot: "Em separação", curto: "Separação" },
   { id: "separado",   rot: "Separado",     curto: "Separado" },
   { id: "entregue",   rot: "Entregue",     curto: "Entregue" },
@@ -37,29 +43,39 @@ const ehAlmox = () => !!(typeof usuarioAtual !== "undefined" && usuarioAtual && 
 const gmOS  = () => GM.os.filter(o => (o.unidade || "UIS3") === UN);
 const gmMat = () => GM.mat.filter(m => (m.unidade || "UIS3") === UN);
 const gmSep = () => GM.sep.filter(s => (s.unidade || "UIS3") === UN);
+const gmOCs = () => GM.oc.filter(c => (c.unidade || "UIS3") === UN);
 const dataCurta = (iso) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || "")); return m ? `${m[3]}/${m[2]}` : ""; };
 const numSep = (s) => "SEP-" + String(s.numero || "—").padStart(4, "0");
 const rotOS = (o) => o ? ((o.numero ? "OS " + o.numero : "OS s/ nº") + (o.descricao ? " · " + o.descricao : "")) : "OS removida";
+const numOC = (c) => c ? (c.numero ? "OC " + c.numero : "OC s/ nº") : "";
+const rotOC = (c) => c ? numOC(c) + (c.fornecedor ? " · " + c.fornecedor : "") : "Sem OC";
+const OC_SITU = { aberta: "A receber", parcial: "Recebida em parte", recebida: "Recebida", vazia: "Sem itens", cancelada: "Cancelada" };
+const GM_SEM_OC = `As OCs ainda não foram instaladas no banco: rode <code>supabase/06_oc_fornecedor.sql</code> no SQL Editor do Supabase (uma vez).`;
 
 /* ---------------- dados ---------------- */
 function gmLocalLer() {
   const d = LS.ler(GM_LS, {});
-  return { os: d.os || [], mat: d.mat || [], sep: d.sep || [], si: d.si || [] };
+  return { os: d.os || [], oc: d.oc || [], mat: d.mat || [], sep: d.sep || [], si: d.si || [] };
 }
-function gmLocalGravar() { LS.gravar(GM_LS, { os: GM.os, mat: GM.mat, sep: GM.sep, si: GM.si }); }
+function gmLocalGravar() { LS.gravar(GM_LS, { os: GM.os, oc: GM.oc, mat: GM.mat, sep: GM.sep, si: GM.si }); }
 
 async function gmCarregar(forcar = false) {
   if (GM.carregando) return GM.carregando;
   if (GM.pronto && !forcar) return;
   GM.carregando = (async () => {
     if (!sb) { Object.assign(GM, gmLocalLer(), { pronto: true }); return; }
-    const res = await Promise.all(Object.values(GM_TAB).map(t => buscarPorChave(t, "*", "id", 1000)));
-    const falha = res.find(r => r.error);
+    const chaves = Object.keys(GM_TAB);
+    const res = await Promise.all(chaves.map(k => buscarPorChave(GM_TAB[k], "*", "id", 1000)));
+    const iOC = chaves.indexOf("oc");
+    const falha = res.find((r, i) => r.error && i !== iOC);
     if (falha) {
       if (semFuncao(falha.error)) GM.semTabelas = true; else GM.erro = falha.error.message;
       return;
     }
-    [GM.os, GM.mat, GM.sep, GM.si] = res.map(r => r.data || []);
+    /* sem a tabela de OCs (script 06 não rodado): o resto funciona; a OC fica indisponível */
+    GM.semOC = !!res[iOC].error && semFuncao(res[iOC].error);
+    if (res[iOC].error && !GM.semOC) { GM.erro = res[iOC].error.message; return; }
+    chaves.forEach((k, i) => { GM[k] = res[i].data || []; });
     Object.assign(GM, { pronto: true, semTabelas: false, erro: "" });
     gmTempoReal();
   })().catch(e => { GM.erro = e.message; }).finally(() => { GM.carregando = null; });
@@ -70,16 +86,21 @@ async function gmCarregar(forcar = false) {
 function gmTempoReal() {
   if (!sb || GM.canal || !sb.channel) return;
   let ch = sb.channel("rq-materiais");
-  for (const [k, t] of Object.entries(GM_TAB))
+  for (const [k, t] of Object.entries(GM_TAB)) {
+    if (k === "oc" && GM.semOC) continue;
     ch = ch.on("postgres_changes", { event: "*", schema: "public", table: t }, (p) => gmEvento(k, p));
+  }
   GM.canal = ch.subscribe((estado) => { if (estado === "SUBSCRIBED" && GM.pronto) gmCarregar(true).then(gmMudou); });
 }
+/* OC apagada: os itens voltam para "Sem OC" (no banco, a chave estrangeira faz o mesmo) */
+const gmSoltarDaOC = (ids) => { for (const m of GM.mat) if (ids.has(m.oc_id)) { m.oc_id = null; m.oc = ""; } };
 function gmEvento(k, p) {
   if (p.eventType === "DELETE") {
     const id = p.old && p.old.id; if (!id) return;
     GM[k] = GM[k].filter(x => x.id !== id);
     if (k === "sep") GM.si = GM.si.filter(x => x.sep_id !== id);
     if (k === "mat") GM.si = GM.si.filter(x => x.mat_id !== id);
+    if (k === "oc") gmSoltarDaOC(new Set([id]));
     if (k === "os") { const ids = new Set(GM.mat.filter(m => m.os_id === id).map(m => m.id)); GM.mat = GM.mat.filter(m => m.os_id !== id); GM.si = GM.si.filter(x => !ids.has(x.mat_id)); }
   } else if (p.new && p.new.id) {
     const i = GM[k].findIndex(x => x.id === p.new.id);
@@ -135,9 +156,10 @@ async function gmAtualizar(k, ids, campos) {
 async function gmExcluir(k, ids) {
   ids = [].concat(ids); if (!ids.length) return true;
   const set = new Set(ids);
-  const copia = { os: GM.os.slice(), mat: GM.mat.slice(), sep: GM.sep.slice(), si: GM.si.slice() };
+  const copia = { os: GM.os.slice(), oc: GM.oc.slice(), mat: GM.mat.map(m => ({ ...m })), sep: GM.sep.slice(), si: GM.si.slice() };
   GM[k] = GM[k].filter(x => !set.has(x.id));
   if (k === "os") { const m = new Set(GM.mat.filter(x => set.has(x.os_id)).map(x => x.id)); GM.mat = GM.mat.filter(x => !set.has(x.os_id)); GM.si = GM.si.filter(x => !m.has(x.mat_id)); }
+  if (k === "oc") gmSoltarDaOC(set);
   if (k === "mat") GM.si = GM.si.filter(x => !set.has(x.mat_id));
   if (k === "sep") GM.si = GM.si.filter(x => !set.has(x.sep_id));
   if (!sb) { gmLocalGravar(); return true; }
@@ -149,7 +171,7 @@ async function gmExcluir(k, ids) {
 /* ---------------- índices e etapas ---------------- */
 function gmIdx() {
   const sepPor = new Map(GM.sep.map(s => [s.id, s]));
-  const siPorMat = new Map(), siPorSep = new Map(), matPorOs = new Map();
+  const siPorMat = new Map(), siPorSep = new Map(), matPorOs = new Map(), matPorOc = new Map();
   for (const x of GM.si) {
     const s = sepPor.get(x.sep_id); if (!s) continue;
     if (!siPorSep.has(x.sep_id)) siPorSep.set(x.sep_id, []);
@@ -158,43 +180,77 @@ function gmIdx() {
     if (!siPorMat.has(x.mat_id)) siPorMat.set(x.mat_id, []);
     siPorMat.get(x.mat_id).push(x);
   }
-  for (const m of GM.mat) { if (!matPorOs.has(m.os_id)) matPorOs.set(m.os_id, []); matPorOs.get(m.os_id).push(m); }
+  for (const m of GM.mat) {
+    if (!matPorOs.has(m.os_id)) matPorOs.set(m.os_id, []); matPorOs.get(m.os_id).push(m);
+    if (m.oc_id) { if (!matPorOc.has(m.oc_id)) matPorOc.set(m.oc_id, []); matPorOc.get(m.oc_id).push(m); }
+  }
   const osPor = new Map(GM.os.map(o => [o.id, o]));
+  const ocPor = new Map(GM.oc.map(c => [c.id, c]));
   const matPor = new Map(GM.mat.map(m => [m.id, m]));
-  return { sepPor, siPorMat, siPorSep, matPorOs, osPor, matPor };
+  return { sepPor, siPorMat, siPorSep, matPorOs, matPorOc, osPor, ocPor, matPor };
 }
+/* OC do item, previsão (própria ou da OC) e data do pedido (da OC) */
+const gmOcDe = (m, idx) => (m && m.oc_id && (idx ? idx.ocPor.get(m.oc_id) : GM.oc.find(c => c.id === m.oc_id))) || null;
+const gmOcAtiva = (m, idx) => { const c = gmOcDe(m, idx); return c && c.status !== "cancelada" ? c : null; };
+const gmPrev = (m, idx) => m.data_prev || ((gmOcAtiva(m, idx) || {}).data_prev) || "";
+const gmPrevPropria = (m, idx) => { const c = gmOcAtiva(m, idx); return !!m.data_prev && !!c && m.data_prev !== c.data_prev; };
+const gmPedido = (m, idx) => ((gmOcAtiva(m, idx) || {}).data_pedido) || m.data_pedido || "";
 function gmEtapa(m, idx) {
   if (m.cancelado) return "cancelado";
   if (m.data_entrega) return "entregue";
   const si = idx.siPorMat.get(m.id) || [];
   if (si.some(x => x.separado)) return "separado";
   if (si.some(x => { const s = idx.sepPor.get(x.sep_id); return s && (s.status === "enviada" || s.status === "separada"); })) return "separacao";
-  if (String(m.oc || "").trim()) return "comprado";
+  if (m.data_receb) return "recebido";
+  if (gmOcAtiva(m, idx)) return "comprado";
   return "aguardando";
 }
-const gmAtrasado = (m, etapa) => !!m.data_prev && m.data_prev < hoje() && ETAPA_ORDEM[etapa] <= ETAPA_ORDEM.separacao;
+/* já está fisicamente na unidade? (recebido, ou o almoxarifado já separou/entregou) */
+const gmRecebido = (m, etapa) => !!m.data_receb || etapa === "separado" || etapa === "entregue";
+/* atrasado = previsão vencida e ainda não chegou do fornecedor */
+const gmAtrasado = (m, etapa, idx) => { const p = gmPrev(m, idx); return !!p && p < hoje() && !m.data_receb && ["aguardando", "comprado", "separacao"].includes(etapa); };
 /* sep ativa (não cancelada) em que o item já está */
 const gmSepDoItem = (m, idx) => (idx.siPorMat.get(m.id) || []).map(x => idx.sepPor.get(x.sep_id)).find(s => s && s.status !== "entregue");
 
 function gmResumoOS(o, idx) {
   const itens = (idx.matPorOs.get(o.id) || []).filter(m => !m.cancelado);
   const cont = Object.fromEntries(ETAPAS.map(e => [e.id, 0]));
-  let valor = 0, atrasados = 0, prox = "";
+  let valor = 0, atrasados = 0, recebidos = 0, prox = "";
   for (const m of itens) {
     const e = gmEtapa(m, idx);
     cont[e]++;
     valor += (+m.qtd || 0) * (+m.preco || 0);
-    if (gmAtrasado(m, e)) atrasados++;
-    if (m.data_prev && ETAPA_ORDEM[e] < ETAPA_ORDEM.separado && (!prox || m.data_prev < prox)) prox = m.data_prev;
+    if (gmAtrasado(m, e, idx)) atrasados++;
+    if (gmRecebido(m, e)) recebidos++;
+    else { const p = gmPrev(m, idx); if (p && (!prox || p < prox)) prox = p; }
   }
   const etapa = itens.length ? ETAPAS.find(e => cont[e.id] > 0).id : "aguardando";
   const proj = o.projeto_id ? projetos.find(p => p.id === o.projeto_id) : null;
-  return { o, itens, cont, valor, atrasados, prox, etapa, proj, vazia: !itens.length };
+  return { o, itens, cont, valor, atrasados, recebidos, prox, etapa, proj, vazia: !itens.length };
+}
+/* situação da OC, derivada dos itens */
+function gmResumoOC(c, idx) {
+  const itens = (idx.matPorOc.get(c.id) || []).filter(m => !m.cancelado);
+  let receb = 0, valor = 0, atrasados = 0, prox = "";
+  const oss = new Set();
+  for (const m of itens) {
+    const e = gmEtapa(m, idx);
+    valor += (+m.qtd || 0) * (+m.preco || 0);
+    oss.add(m.os_id);
+    if (gmRecebido(m, e)) receb++;
+    else { const p = gmPrev(m, idx); if (p && (!prox || p < prox)) prox = p; if (gmAtrasado(m, e, idx)) atrasados++; }
+  }
+  const situ = c.status === "cancelada" ? "cancelada" : !itens.length ? "vazia" : receb === itens.length ? "recebida" : receb ? "parcial" : "aberta";
+  return { c, itens, receb, valor, atrasados, prox, situ, oss: [...oss].map(id => idx.osPor.get(id)).filter(Boolean) };
 }
 
 /* ---------------- filtros (guardados na sessão) ---------------- */
-const gmFiltro = () => { try { return { q: "", proj: "", disc: "", etapa: "", os: "", entregues: false, ...JSON.parse(sessionStorage.getItem("rq.gmFiltro") || "{}") }; } catch { return { q: "", proj: "", disc: "", etapa: "", os: "", entregues: false }; } };
+const GM_F0 = { q: "", proj: "", disc: "", etapa: "", os: "", entregues: false, agrupar: "os", ocSitu: "abertas" };
+const gmFiltro = () => { try { return { ...GM_F0, ...JSON.parse(sessionStorage.getItem("rq.gmFiltro") || "{}") }; } catch { return { ...GM_F0 }; } };
 const gmGuardarFiltro = (f) => { try { sessionStorage.setItem("rq.gmFiltro", JSON.stringify(f)); } catch { /* sem sessão */ } };
+/* texto de busca de um item: código, descrição, OC (nº e fornecedor) e OS */
+const gmTextoItem = (m, idx) => { const c = gmOcDe(m, idx) || {}, o = idx.osPor.get(m.os_id) || {};
+  return norm([m.codigo, m.descricao, c.numero, c.fornecedor, o.numero, o.descricao].join(" ")); };
 function gmPassaFiltro(o, f, idx, itensTambem = true) {
   if (f.proj === "_soltas" && o.projeto_id) return false;
   if (f.proj === "_projetos" && !o.projeto_id) return false;
@@ -206,7 +262,7 @@ function gmPassaFiltro(o, f, idx, itensTambem = true) {
   const alvo = norm([o.numero, o.descricao, o.disciplina, proj].join(" "));
   if (q.split(/\s+/).every(t => alvo.includes(t))) return true;
   if (!itensTambem) return false;
-  return (idx.matPorOs.get(o.id) || []).some(m => { const a = norm(m.codigo + " " + m.descricao + " " + m.oc); return q.split(/\s+/).every(t => a.includes(t)); });
+  return (idx.matPorOs.get(o.id) || []).some(m => { const a = gmTextoItem(m, idx); return q.split(/\s+/).every(t => a.includes(t)); });
 }
 
 /* ============================================================
@@ -218,12 +274,15 @@ function telaMateriais(app, aba = "quadro") {
   const cab = `<div class="pagina-titulo gm-titulo">
       <h1>${ehAlmox() ? "Separação de materiais" : "Gestão de Materiais"}</h1><span class="etiqueta tipo">${esc(UNI().nome)}</span>
       <span class="espacador"></span>
-      ${ehAlmox() ? "" : `<button class="btn sec" id="gm-nova-sep" title="Lista de itens para o almoxarifado separar">+ Lista de separação</button>
+      ${ehAlmox() ? "" : aba === "ocs"
+        ? `<button class="btn" id="gm-nova-oc" title="Cadastrar uma ordem de compra e pôr itens nela">+ Nova OC</button>`
+        : `<button class="btn sec" id="gm-nova-sep" title="Lista de itens para o almoxarifado separar">+ Lista de separação</button>
       <button class="btn" id="gm-vincular" title="Mandar itens de uma RM concluída para uma OS">🔗 Vincular RM à OS</button>`}
     </div>
     ${ehAlmox() ? "" : `<nav class="gm-abas" role="tablist">
       <a role="tab" href="#/materiais" class="${aba === "quadro" ? "ativa" : ""}">Quadro de OS</a>
       <a role="tab" href="#/materiais/itens" class="${aba === "itens" ? "ativa" : ""}">Itens</a>
+      <a role="tab" href="#/materiais/ocs" class="${aba === "ocs" ? "ativa" : ""}">OCs</a>
       <a role="tab" href="#/materiais/separacao" class="${aba === "separacao" ? "ativa" : ""}">Separação</a>
     </nav>`}`;
   if (!GM.pronto) {
@@ -235,6 +294,7 @@ function telaMateriais(app, aba = "quadro") {
   app.innerHTML = cab + `<div id="gm-corpo"></div>`;
   const corpo = $("#gm-corpo");
   if (aba === "itens") gmAbaItens(corpo);
+  else if (aba === "ocs") gmAbaOCs(corpo);
   else if (aba === "separacao") gmAbaSeparacao(corpo);
   else gmAbaQuadro(corpo);
   gmLigarCab();
@@ -249,6 +309,11 @@ function gmAvisoCarga() {
 function gmLigarCab() {
   const v = $("#gm-vincular"); if (v) v.onclick = () => gmVincularRM();
   const n = $("#gm-nova-sep"); if (n) n.onclick = () => gmNovaSeparacao();
+  const c = $("#gm-nova-oc"); if (c) c.onclick = async () => {
+    if (GM.semOC) { toast("As OCs ainda não foram instaladas no banco (rode o script 06)."); return; }
+    const oc = await gmFormOC();
+    if (oc) { toast(`🧾 ${numOC(oc)} cadastrada — agora ponha os itens nela`); location.hash = "#/oc/" + oc.id; }
+  };
   const t = $("#gm-tentar"); if (t) t.onclick = () => { GM.erro = ""; render(); };
 }
 
@@ -329,71 +394,124 @@ function gmAbaQuadro(corpo) {
   };
 }
 
-/* ---------------- aba ITENS (lista operacional) ---------------- */
-function gmAbaItens(corpo, osFixa = null) {
-  const f = osFixa ? { q: "", proj: "", disc: "", etapa: GM.etapaOS || "" } : gmFiltro();
+/* ---------------- aba ITENS (lista operacional) ----------------
+   fixo: null (aba Itens) · { os: id } (tela da OS) · { oc: id } (tela da OC)
+   Agrupa por OS ou por OC (na OS, por OC; na OC, por OS). */
+function gmAbaItens(corpo, fixo = null) {
+  const f = fixo ? { ...GM_F0, etapa: GM.etapaFixo || "" } : gmFiltro();
+  const agr = fixo ? (fixo.os ? "oc" : "os") : (f.agrupar === "oc" && !GM.semOC ? "oc" : "os");
   const idx = gmIdx();
-  const oss = gmOS().filter(o => o.status !== "cancelada" && (!osFixa || o.id === osFixa) && (osFixa || gmPassaFiltro(o, f, idx, false)));
   const q = norm(f.q).trim(), termos = q ? q.split(/\s+/) : [];
-  const linhasPorOS = [];
-  const contEt = Object.fromEntries([...ETAPAS.map(e => [e.id, 0]), ["atrasados", 0]]);
-  for (const o of oss) {
-    const itens = (idx.matPorOs.get(o.id) || []).filter(m => (m.unidade || "UIS3") === UN).map(m => ({ m, e: gmEtapa(m, idx) }))
-      .filter(x => x.e !== "cancelado" || osFixa);
-    const casaOS = !termos.length || termos.every(t => norm([o.numero, o.descricao].join(" ")).includes(t));
-    const vis = itens.filter(x => casaOS || termos.every(t => norm(x.m.codigo + " " + x.m.descricao + " " + x.m.oc).includes(t)));
-    for (const x of vis) { if (contEt[x.e] != null) contEt[x.e]++; if (gmAtrasado(x.m, x.e)) contEt.atrasados++; }
-    const filtradas = vis.filter(x => !f.etapa || (f.etapa === "atrasados" ? gmAtrasado(x.m, x.e) : x.e === f.etapa));
-    if (filtradas.length || osFixa) linhasPorOS.push({ o, itens: filtradas });
+  /* itens no escopo */
+  let base;
+  if (fixo && fixo.oc) base = (idx.matPorOc.get(fixo.oc) || []).slice();
+  else {
+    const oss = gmOS().filter(o => o.status !== "cancelada" && (!fixo || o.id === fixo.os) && (fixo || gmPassaFiltro(o, f, idx, false)));
+    base = oss.flatMap(o => idx.matPorOs.get(o.id) || []);
   }
-  const visiveis = new Set(linhasPorOS.flatMap(g => g.itens.map(x => x.m.id)));
+  const todos = base.filter(m => (m.unidade || "UIS3") === UN).map(m => ({ m, e: gmEtapa(m, idx) })).filter(x => x.e !== "cancelado" || fixo);
+  const vis = todos.filter(x => !termos.length || termos.every(t => gmTextoItem(x.m, idx).includes(t)));
+  const contEt = Object.fromEntries([...ETAPAS.map(e => [e.id, 0]), ["atrasados", 0]]);
+  for (const x of vis) { if (contEt[x.e] != null) contEt[x.e]++; if (gmAtrasado(x.m, x.e, idx)) contEt.atrasados++; }
+  const filtradas = vis.filter(x => !f.etapa || (f.etapa === "atrasados" ? gmAtrasado(x.m, x.e, idx) : x.e === f.etapa));
+
+  /* grupos */
+  const mapa = new Map();
+  for (const x of filtradas) {
+    const k = agr === "oc" ? (gmOcDe(x.m, idx) ? x.m.oc_id : "") : x.m.os_id;
+    if (!mapa.has(k)) mapa.set(k, []);
+    mapa.get(k).push(x);
+  }
+  let grupos = [...mapa.entries()].map(([k, itens]) => ({ k, itens }));
+  if (agr === "oc") {
+    const rs = new Map(grupos.filter(g => g.k).map(g => [g.k, gmResumoOC(idx.ocPor.get(g.k), idx)]));
+    grupos.forEach(g => { g.r = rs.get(g.k); });
+    grupos.sort((a, b) => (!!a.k - !!b.k)                                   // Sem OC primeiro: é o que pede ação
+      || ((b.r ? b.r.atrasados : 0) - (a.r ? a.r.atrasados : 0))
+      || String((a.r && a.r.prox) || "9").localeCompare(String((b.r && b.r.prox) || "9"))
+      || String(idx.ocPor.get(a.k).numero).localeCompare(String(idx.ocPor.get(b.k).numero), "pt-BR", { numeric: true }));
+  }
+  const visiveis = new Set(filtradas.map(x => x.m.id));
   for (const id of [...GM.sel]) if (!visiveis.has(id)) GM.sel.delete(id);
   const listaRM = (id) => listas.find(l => l.id === id);
+
   const linha = ({ m, e }) => {
-    const rm = listaRM(m.lista_id), sep = gmSepDoItem(m, idx), atr = gmAtrasado(m, e);
+    const rm = listaRM(m.lista_id), sep = gmSepDoItem(m, idx), atr = gmAtrasado(m, e, idx);
+    const c = gmOcDe(m, idx), ativa = c && c.status !== "cancelada";
+    const prev = gmPrev(m, idx), propria = gmPrevPropria(m, idx), herdada = !m.data_prev && !!prev;
+    const ped = gmPedido(m, idx), o = idx.osPor.get(m.os_id);
     return `<tr class="gm-linha et-${e}${atr ? " atrasado" : ""}${GM.sel.has(m.id) ? " sel" : ""}" data-id="${esc(m.id)}">
       <td class="gm-c-sel"><input type="checkbox" data-sel="${esc(m.id)}" ${GM.sel.has(m.id) ? "checked" : ""} aria-label="Selecionar"></td>
-      <td class="gm-c-et"><span class="et-chip et-${e}">${e === "cancelado" ? "Cancelado" : rotEtapa(e)}</span>${atr ? '<span class="et-atraso" title="Previsão de entrega vencida">⚠</span>' : ""}</td>
+      <td class="gm-c-et"><span class="et-chip et-${e}">${e === "cancelado" ? "Cancelado" : rotEtapa(e)}</span>${atr ? '<span class="et-atraso" title="Previsão de entrega vencida e ainda não recebido">⚠</span>' : ""}</td>
       <td class="gm-c-cod">${esc(m.codigo)}</td>
-      <td class="gm-c-desc">${esc(m.descricao)}<div class="gm-sub">${rm ? `<a href="#/lista/${esc(rm.id)}">RM ${esc(curto(rm.titulo, 34))}</a>` : "RM removida"}${sep ? ` · <a href="#/separacao/${esc(sep.id)}">${numSep(sep)}</a>` : ""}</div></td>
+      <td class="gm-c-desc">${esc(m.descricao)}<div class="gm-sub">${rm ? `<a href="#/lista/${esc(rm.id)}">RM ${esc(curto(rm.titulo, 34))}</a>` : "RM removida"}${agr === "os" ? "" : ` · <a href="#/os/${esc(m.os_id)}">${esc(o ? (o.numero ? "OS " + o.numero : curto(o.descricao, 24)) : "OS removida")}</a>`}${sep ? ` · <a href="#/separacao/${esc(sep.id)}">${numSep(sep)}</a>` : ""}</div></td>
       <td class="gm-c-qtd num">${fmtNum(+m.qtd) || "0"} <small>${esc(m.un)}</small></td>
-      <td class="gm-c-oc"><label class="gm-rot-m">OC</label><input class="gm-in" data-campo="oc" value="${esc(m.oc || "")}" placeholder="nº OC" inputmode="numeric" autocomplete="off"></td>
-      <td class="gm-c-dt"><label class="gm-rot-m">Pedido</label><input type="date" class="gm-in" data-campo="data_pedido" value="${esc(m.data_pedido || "")}"></td>
-      <td class="gm-c-dt"><label class="gm-rot-m">Previsão</label><input type="date" class="gm-in${atr ? " vencida" : ""}" data-campo="data_prev" value="${esc(m.data_prev || "")}"></td>
-      <td class="gm-c-dt"><label class="gm-rot-m">Entregue</label><input type="date" class="gm-in" data-campo="data_entrega" value="${esc(m.data_entrega || "")}"></td>
+      <td class="gm-c-oc"><label class="gm-rot-m">OC</label>
+        <input class="gm-in gm-oc-in${c && !ativa ? " oc-cancelada" : ""}" data-campo="oc" list="gm-dl-oc" value="${esc(c ? c.numero : "")}" placeholder="${c ? "OC s/ nº" : "nº OC"}" inputmode="numeric" autocomplete="off" ${GM.semOC ? "disabled" : ""}>
+        ${c ? `<div class="gm-sub"><a href="#/oc/${esc(c.id)}">${ativa ? esc(c.fornecedor || "fornecedor?") : "OC cancelada"}</a>${ativa && ped ? " · ped. " + dataCurta(ped) : ""}</div>` : ""}</td>
+      <td class="gm-c-dt"><label class="gm-rot-m">Previsão${herdada ? " (da OC)" : propria ? " própria" : ""}</label><input type="date" class="gm-in${atr ? " vencida" : ""}${herdada ? " herdada" : ""}" data-campo="data_prev" value="${esc(prev)}" title="${herdada ? "Previsão da OC" : propria ? "Previsão própria deste item (a da OC é " + (dataBR(c.data_prev) || "vazia") + ")" : "Previsão de entrega"}">
+        ${propria ? `<div class="gm-sub gm-prev-propria">própria</div>` : ""}</td>
+      <td class="gm-c-dt"><label class="gm-rot-m">Recebido</label><input type="date" class="gm-in" data-campo="data_receb" value="${esc(m.data_receb || "")}" title="Chegou do fornecedor"></td>
+      <td class="gm-c-dt"><label class="gm-rot-m">Entregue</label><input type="date" class="gm-in" data-campo="data_entrega" value="${esc(m.data_entrega || "")}" title="Saiu do almoxarifado para a frente de serviço"></td>
       <td class="gm-c-menu"><button class="btn sec mini" data-menu="${esc(m.id)}" aria-label="Mais ações">⋯</button></td>
     </tr>`;
   };
-  const grupo = (g) => {
-    const p = g.o.projeto_id ? projetos.find(x => x.id === g.o.projeto_id) : null;
+  const marcadoTudo = (g) => g.itens.length && g.itens.every(x => GM.sel.has(x.m.id));
+  const grupoOS = (g) => {
+    const o = idx.osPor.get(g.k) || {};
+    const p = o.projeto_id ? projetos.find(x => x.id === o.projeto_id) : null;
     return `<tr class="gm-grupo${p ? " de-projeto" : ""}"><td colspan="10">
-      <input type="checkbox" data-sel-os="${esc(g.o.id)}" aria-label="Selecionar os itens desta OS" ${g.itens.length && g.itens.every(x => GM.sel.has(x.m.id)) ? "checked" : ""}>
-      <a href="#/os/${esc(g.o.id)}"><b>${g.o.numero ? "OS " + esc(g.o.numero) : "OS s/ nº"}</b> ${esc(g.o.descricao || "")}</a>
-      ${g.o.disciplina ? `<span class="chip-disc">${esc(g.o.disciplina)}</span>` : ""}
+      <input type="checkbox" data-sel-g="${esc(g.k)}" aria-label="Selecionar os itens desta OS" ${marcadoTudo(g) ? "checked" : ""}>
+      <a href="#/os/${esc(g.k)}"><b>${o.numero ? "OS " + esc(o.numero) : "OS s/ nº"}</b> ${esc(o.descricao || "")}</a>
+      ${o.disciplina ? `<span class="chip-disc">${esc(o.disciplina)}</span>` : ""}
       <span class="gm-grupo-proj">${p ? "📁 " + esc(p.nome) : "OS solta"}</span>
       <span class="gm-grupo-n">${g.itens.length} ite${g.itens.length === 1 ? "m" : "ns"}</span></td></tr>`;
   };
+  const grupoOC = (g) => {
+    if (!g.k) return `<tr class="gm-grupo gm-grupo-semoc"><td colspan="10">
+      <input type="checkbox" data-sel-g="" aria-label="Selecionar os itens sem OC" ${marcadoTudo(g) ? "checked" : ""}>
+      <b>Sem OC</b> <span class="gm-grupo-proj">aguardando compra</span>
+      ${GM.semOC ? "" : `<button class="btn mini gm-g-oc" data-oc-grupo="">🧾 Pôr numa OC</button>`}
+      <span class="gm-grupo-n">${g.itens.length} ite${g.itens.length === 1 ? "m" : "ns"}</span></td></tr>`;
+    const c = idx.ocPor.get(g.k), r = g.r;
+    return `<tr class="gm-grupo gm-grupo-oc situ-${r.situ}${r.atrasados ? " com-atraso" : ""}"><td colspan="10">
+      <input type="checkbox" data-sel-g="${esc(g.k)}" aria-label="Selecionar os itens desta OC" ${marcadoTudo(g) ? "checked" : ""}>
+      <a href="#/oc/${esc(c.id)}"><b>${esc(numOC(c))}</b> ${esc(c.fornecedor || "")}</a>
+      <span class="oc-situ situ-${r.situ}">${OC_SITU[r.situ]}</span>
+      <span class="gm-grupo-proj">${c.data_pedido ? "pedido " + dataCurta(c.data_pedido) : ""}${c.data_prev ? `${c.data_pedido ? " · " : ""}prev. <b class="${r.atrasados ? "atraso" : ""}">${dataCurta(c.data_prev)}</b>` : ""}</span>
+      <span class="gm-grupo-n">${r.receb}/${r.itens.length} recebido(s)${g.itens.length !== r.itens.length ? ` · ${g.itens.length} aqui` : ""}</span></td></tr>`;
+  };
+  const grupo = agr === "oc" ? grupoOC : grupoOS;
   const chips = [["", "Todos"], ...ETAPAS.map(e => [e.id, e.rot]), ["atrasados", "⚠ Atrasados"]]
     .map(([id, rot]) => `<button class="h-chip et-f et-${id || "todos"} ${f.etapa === id ? "bc-ativo" : ""}" data-etapa="${id}">${rot}${id ? ` <b>${contEt[id] || 0}</b>` : ""}</button>`).join("");
+  const dlOC = GM.semOC ? "" : `<datalist id="gm-dl-oc">${gmOCs().filter(c => c.numero && c.status !== "cancelada")
+    .map(c => `<option value="${esc(c.numero)}">${esc(c.fornecedor || "")} · ${(idx.matPorOc.get(c.id) || []).length} ite${(idx.matPorOc.get(c.id) || []).length === 1 ? "m" : "ns"}</option>`).join("")}</datalist>`;
 
   corpo.innerHTML = `
-    ${osFixa ? "" : `<div class="gm-filtros">
-      <input type="search" id="gm-q" placeholder="Procurar código, descrição, OC, OS…" value="${esc(f.q)}" autocomplete="off">
+    ${fixo ? "" : `<div class="gm-filtros">
+      <input type="search" id="gm-q" placeholder="Procurar código, descrição, OC, fornecedor, OS…" value="${esc(f.q)}" autocomplete="off">
       <select id="gm-proj"><option value="">Todos os projetos</option><option value="_projetos" ${f.proj === "_projetos" ? "selected" : ""}>Só OS de projeto</option>
         <option value="_soltas" ${f.proj === "_soltas" ? "selected" : ""}>Só OS soltas</option>
         ${projetosUN().filter(p => gmOS().some(o => o.projeto_id === p.id)).map(p => `<option value="${esc(p.id)}" ${f.proj === p.id ? "selected" : ""}>📁 ${esc(p.nome)}</option>`).join("")}</select>
+      ${GM.semOC ? "" : `<div class="seg gm-agrupar" role="group" aria-label="Agrupar por">
+        <button type="button" data-agr="os" class="${agr === "os" ? "ativo" : ""}">Por OS</button>
+        <button type="button" data-agr="oc" class="${agr === "oc" ? "ativo" : ""}">Por OC</button></div>`}
     </div>`}
+    ${GM.semOC && !fixo ? `<div class="aviso-info">${GM_SEM_OC}</div>` : ""}
     <div class="h-chips gm-etapas">${chips}</div>
+    ${dlOC}
     <div class="gm-tabela-env">
       <table class="app gm-tabela">
-        <thead><tr><th class="gm-c-sel"></th><th>Etapa</th><th>Código</th><th>Descrição</th><th class="num">Qtd</th><th>OC</th><th>Pedido</th><th>Previsão</th><th>Entregue</th><th></th></tr></thead>
-        <tbody>${linhasPorOS.map(g => grupo(g) + g.itens.map(linha).join("")).join("")
-          || `<tr><td colspan="10" class="h-vazio">${GM.mat.length ? "Nenhum item com esses filtros." : "Nenhum item vinculado ainda. Use 🔗 Vincular RM à OS."}</td></tr>`}</tbody>
+        <thead><tr><th class="gm-c-sel"></th><th>Etapa</th><th>Código</th><th>Descrição</th><th class="num">Qtd</th><th>OC</th><th>Previsão</th><th>Recebido</th><th>Entregue</th><th></th></tr></thead>
+        <tbody>${grupos.map(g => grupo(g) + g.itens.map(linha).join("")).join("")
+          || `<tr><td colspan="10" class="h-vazio">${fixo && fixo.oc ? "Nenhum item nesta OC ainda. Use <strong>+ Itens</strong>." : GM.mat.length ? "Nenhum item com esses filtros." : "Nenhum item vinculado ainda. Use 🔗 Vincular RM à OS."}</td></tr>`}</tbody>
       </table>
     </div>
     <div class="gm-acoes-lote" id="gm-lote" ${GM.sel.size ? "" : "hidden"}>
       <span><b id="gm-n-sel">${GM.sel.size}</b> selecionado(s)</span>
-      <button class="btn sec mini" data-lote="datas">OC / datas</button>
+      ${GM.semOC ? "" : `<button class="btn sec mini" data-lote="oc">🧾 OC</button>`}
+      <button class="btn sec mini" data-lote="prev">Previsão</button>
+      <button class="btn sec mini" data-lote="receb">📥 Recebido</button>
       <button class="btn sec mini" data-lote="sep">Lista de separação</button>
       <button class="btn sec mini" data-lote="entregue">Entregue</button>
       <button class="btn sec mini" data-lote="mover">Mover de OS</button>
@@ -401,11 +519,11 @@ function gmAbaItens(corpo, osFixa = null) {
       <button class="btn sec mini" data-lote="limpar" aria-label="Limpar seleção">✕</button>
     </div>`;
 
-  const redesenhar = () => gmAbaItens(corpo, osFixa);
+  const redesenhar = () => { if (fixo && GM.tela) GM.tela(); else gmAbaItens(corpo, fixo); };
   const qEl = $("#gm-q", corpo);
   if (qEl) {
     let t = null;
-    qEl.oninput = () => { clearTimeout(t); t = setTimeout(() => { f.q = qEl.value; gmGuardarFiltro(f); redesenhar(); const n = $("#gm-q", corpo); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 220); };
+    qEl.oninput = () => { clearTimeout(t); t = setTimeout(() => { f.q = qEl.value; gmGuardarFiltro(f); gmAbaItens(corpo, fixo); const n = $("#gm-q", corpo); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 220); };
   }
   const pj = $("#gm-proj", corpo); if (pj) pj.onchange = (e) => { f.proj = e.target.value; gmGuardarFiltro(f); redesenhar(); };
   const atualizarLote = () => {
@@ -416,25 +534,41 @@ function gmAbaItens(corpo, osFixa = null) {
   corpo.onchange = async (e) => {
     const el = e.target;
     if (el.dataset.sel) { el.checked ? GM.sel.add(el.dataset.sel) : GM.sel.delete(el.dataset.sel); el.closest("tr").classList.toggle("sel", el.checked); atualizarLote(); return; }
-    if (el.dataset.selOs) {
-      const g = linhasPorOS.find(x => x.o.id === el.dataset.selOs);
+    if (el.dataset.selG != null) {
+      const g = grupos.find(x => x.k === el.dataset.selG);
       for (const x of g ? g.itens : []) el.checked ? GM.sel.add(x.m.id) : GM.sel.delete(x.m.id);
       redesenhar(); return;
     }
-    if (el.classList.contains("gm-in")) {
-      const id = el.closest("tr").dataset.id, campo = el.dataset.campo;
-      const v = campo === "oc" ? el.value.trim() : (el.value || null);
-      const m = GM.mat.find(x => x.id === id);
-      if (campo === "data_entrega" && v && m && !m.data_entrega) {
-        if (!await confirmar({ titulo: "Marcar como entregue?", icone: "📦", ok: "Marcar entregue",
-          texto: `<strong>${esc(m.codigo)}</strong> ${esc(m.descricao)}<br>Entregue em ${dataBR(v)}.` })) { el.value = ""; return; }
-      }
-      if (await gmAtualizar("mat", id, { [campo]: v })) { toast("✓ Salvo"); redesenhar(); }
+    if (!el.classList.contains("gm-in")) return;
+    if (document.querySelector(".conf, .modal-form")) return;      // já há uma pergunta aberta para esta mudança
+    const id = el.closest("tr").dataset.id, campo = el.dataset.campo;
+    const m = GM.mat.find(x => x.id === id); if (!m) return;
+    let ok = false;
+    if (campo === "oc") ok = await gmOCDigitada(m, el.value.trim(), el);
+    else if (campo === "data_prev") ok = await gmMudarPrev(m, el.value || null, el);
+    else if (campo === "data_entrega") {
+      const v = el.value || null;
+      if (v && !m.data_entrega && !await confirmar({ titulo: "Marcar como entregue?", icone: "📦", ok: "Marcar entregue",
+        texto: `<strong>${esc(m.codigo)}</strong> ${esc(m.descricao)}<br>Entregue em ${dataBR(v)}.` })) { el.value = ""; return; }
+      ok = await gmAtualizar("mat", id, { data_entrega: v });
+    } else if (campo === "data_receb") {
+      ok = await gmAtualizar("mat", id, { data_receb: el.value || null });
+      if (ok && el.value) toast("📥 Recebido em " + dataBR(el.value));
     }
+    if (ok) { if (campo !== "data_receb") toast("✓ Salvo"); redesenhar(); }
   };
   corpo.onclick = async (e) => {
+    const ag = e.target.closest("[data-agr]");
+    if (ag) { f.agrupar = ag.dataset.agr; gmGuardarFiltro(f); redesenhar(); return; }
     const ch = e.target.closest("[data-etapa]");
-    if (ch) { f.etapa = f.etapa === ch.dataset.etapa ? "" : ch.dataset.etapa; if (osFixa) GM.etapaOS = f.etapa; else gmGuardarFiltro(f); redesenhar(); return; }
+    if (ch) { f.etapa = f.etapa === ch.dataset.etapa ? "" : ch.dataset.etapa; if (fixo) GM.etapaFixo = f.etapa; else gmGuardarFiltro(f); redesenhar(); return; }
+    const og = e.target.closest("[data-oc-grupo]");
+    if (og) {
+      const g = grupos.find(x => x.k === og.dataset.ocGrupo);
+      const ids = g ? g.itens.filter(x => x.e !== "cancelado").map(x => x.m.id) : [];
+      if (ids.length && await gmAtribuirOC(ids)) { GM.sel.clear(); redesenhar(); }
+      return;
+    }
     const mn = e.target.closest("[data-menu]");
     if (mn) { gmMenuItem(mn.dataset.menu, redesenhar); return; }
     const lt = e.target.closest("[data-lote]");
@@ -442,7 +576,9 @@ function gmAbaItens(corpo, osFixa = null) {
     const ids = [...GM.sel];
     const a = lt.dataset.lote;
     if (a === "limpar") { GM.sel.clear(); redesenhar(); return; }
-    if (a === "datas") { if (await gmFormDatas(ids)) { redesenhar(); } return; }
+    if (a === "oc") { if (await gmAtribuirOC(ids)) { GM.sel.clear(); redesenhar(); } return; }
+    if (a === "prev") { if (await gmFormPrevLote(ids)) redesenhar(); return; }
+    if (a === "receb") { if (await gmReceber(ids)) { GM.sel.clear(); redesenhar(); } return; }
     if (a === "sep") { gmNovaSeparacao(ids); return; }
     if (a === "mover") { if (await gmMoverItens(ids)) { GM.sel.clear(); redesenhar(); } return; }
     if (a === "entregue") {
@@ -466,10 +602,13 @@ function gmAbaItens(corpo, osFixa = null) {
 async function gmMenuItem(id, depois) {
   const m = GM.mat.find(x => x.id === id); if (!m) return;
   const o = GM.os.find(x => x.id === m.os_id);
+  const c = gmOcDe(m);
   const f = folha({ titulo: `${m.codigo} · ${curto(m.descricao, 40)}`, classe: "menu-item", largura: 460 });
   f.corpo.innerHTML = `<div class="mm-grade">
+    ${GM.semOC ? "" : `<button class="mm-item" data-a="oc"><span class="mm-ico">🧾</span><span><strong>${c ? "Trocar de OC / tirar da OC" : "Pôr numa OC"}</strong><small>${esc(c ? rotOC(c) : "sem OC")}</small></span></button>`}
+    ${c ? `<button class="mm-item" data-a="abrir-oc"><span class="mm-ico">📑</span><span><strong>Abrir a OC</strong><small>${esc(rotOC(c))}</small></span></button>` : ""}
     <button class="mm-item" data-a="rm"><span class="mm-ico">📄</span><span><strong>Abrir a RM de origem</strong></span></button>
-    <button class="mm-item" data-a="os"><span class="mm-ico">🧾</span><span><strong>Abrir a OS</strong><small>${esc(rotOS(o))}</small></span></button>
+    <button class="mm-item" data-a="os"><span class="mm-ico">🏷</span><span><strong>Abrir a OS</strong><small>${esc(rotOS(o))}</small></span></button>
     <button class="mm-item" data-a="obs"><span class="mm-ico">📝</span><span><strong>Observação</strong><small>${esc(m.obs || "nenhuma")}</small></span></button>
     <button class="mm-item" data-a="mover"><span class="mm-ico">↪</span><span><strong>Mover para outra OS</strong></span></button>
     <button class="mm-item" data-a="cancelar"><span class="mm-ico">${m.cancelado ? "↺" : "⊘"}</span><span><strong>${m.cancelado ? "Reativar item" : "Cancelar item"}</strong><small>${m.cancelado ? "volta para o fluxo" : "não vai mais ser comprado/entregue"}</small></span></button>
@@ -478,7 +617,9 @@ async function gmMenuItem(id, depois) {
   f.corpo.onclick = async (e) => {
     const b = e.target.closest("[data-a]"); if (!b) return;
     const a = b.dataset.a; f.fechar();
-    if (a === "rm") location.hash = "#/lista/" + m.lista_id;
+    if (a === "oc") { if (await gmAtribuirOC([id])) depois(); }
+    else if (a === "abrir-oc") location.hash = "#/oc/" + c.id;
+    else if (a === "rm") location.hash = "#/lista/" + m.lista_id;
     else if (a === "os") location.hash = "#/os/" + m.os_id;
     else if (a === "obs") { const v = await perguntar("Observação do item", `${m.codigo} — ${curto(m.descricao, 50)}`, m.obs || ""); if (v !== null && await gmAtualizar("mat", id, { obs: v })) depois(); }
     else if (a === "mover") { if (await gmMoverItens([id])) depois(); }
@@ -494,30 +635,396 @@ async function gmMenuItem(id, depois) {
   };
 }
 
-/* OC e datas em lote */
-async function gmFormDatas(ids) {
-  const itens = GM.mat.filter(m => ids.includes(m.id));
-  const um = itens.length === 1 ? itens[0] : null;
-  const v = await formulario(`OC e datas — ${ids.length} item(ns)`, [
-    { nome: "oc", rot: "Ordem de compra (OC)", ph: "deixe em branco para não mudar", attrs: 'inputmode="numeric" autocomplete="off"' },
+/* ============================================================
+   OC — ordem de compra por fornecedor (1 item ou vários)
+   ============================================================ */
+/* sugestões de fornecedor (os já usados na unidade) */
+function gmDatalistFornecedores() {
+  let dl = document.getElementById("gm-dl-forn");
+  if (!dl) { dl = document.createElement("datalist"); dl.id = "gm-dl-forn"; document.body.appendChild(dl); }
+  const nomes = [...new Set(gmOCs().map(c => (c.fornecedor || "").trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, "pt-BR"));
+  dl.innerHTML = nomes.map(n => `<option value="${esc(n)}">`).join("");
+}
+/* cadastrar / editar OC. sug: { numero, fornecedor } */
+async function gmFormOC(c = null, sug = {}) {
+  if (GM.semOC) { toast("As OCs ainda não foram instaladas no banco (rode o script 06)."); return null; }
+  gmDatalistFornecedores();
+  const v = await formulario(c ? "Editar " + numOC(c) : "Nova OC", [
+    { nome: "numero", rot: "Nº da OC", ph: "Ex.: 4500123456", attrs: 'inputmode="numeric" autocomplete="off"',
+      ajuda: "Uma OC por fornecedor: pode ter 1 item ou vários (de RMs e OS diferentes)." },
+    { nome: "fornecedor", rot: "Fornecedor", ph: "Ex.: WEG, distribuidor, oficina…", attrs: 'list="gm-dl-forn" autocomplete="off"' },
     { nome: "data_pedido", rot: "Data do pedido", tipo: "date" },
-    { nome: "data_prev", rot: "Previsão de entrega", tipo: "date" },
-    { nome: "modo", rot: "Aplicar", opcoes: [["vazios", "Só onde estiver vazio"], ["todos", "Em todos os selecionados (substitui)"]] },
-  ], um ? { oc: um.oc, data_pedido: um.data_pedido || "", data_prev: um.data_prev || "", modo: "todos" } : { modo: "vazios" },
-  (x) => (!x.oc.trim() && !x.data_pedido && !x.data_prev) ? "Preencha ao menos um campo." : "");
-  if (!v) return false;
-  const campos = {};
-  if (v.oc.trim()) campos.oc = v.oc.trim();
-  if (v.data_pedido) campos.data_pedido = v.data_pedido;
-  if (v.data_prev) campos.data_prev = v.data_prev;
-  let ok = true;
-  if (v.modo === "todos") ok = await gmAtualizar("mat", ids, campos);
-  else for (const [c, val] of Object.entries(campos)) {
-    const alvo = itens.filter(m => !String(m[c] || "").trim()).map(m => m.id);
-    if (alvo.length) ok = (await gmAtualizar("mat", alvo, { [c]: val })) && ok;
+    { nome: "data_prev", rot: "Previsão de entrega", tipo: "date",
+      ajuda: "Vale para todos os itens da OC. Um item pode ter previsão própria (entrega parcial / saldo)." },
+    { nome: "obs", rot: "Observação", ph: "condição, contato, frete… (opcional)" },
+  ], c ? { numero: c.numero, fornecedor: c.fornecedor, data_pedido: c.data_pedido || "", data_prev: c.data_prev || "", obs: c.obs || "" }
+       : { numero: sug.numero || "", fornecedor: sug.fornecedor || "", data_pedido: hoje(), data_prev: "", obs: "" },
+  (x) => {
+    if (!x.numero.trim() && !x.fornecedor.trim()) return "Informe o nº da OC ou o fornecedor.";
+    const dup = x.numero.trim() && gmOCs().find(y => (!c || y.id !== c.id) && y.numero === x.numero.trim());
+    if (dup) return `A OC ${x.numero.trim()} já existe (${dup.fornecedor || "sem fornecedor"}). Escolha-a na lista.`;
+    if (x.data_prev && x.data_pedido && x.data_prev < x.data_pedido) return "A previsão de entrega é anterior à data do pedido.";
+    return "";
+  });
+  if (!v) return null;
+  const dados = { numero: v.numero.trim(), fornecedor: v.fornecedor.trim(), data_pedido: v.data_pedido || null, data_prev: v.data_prev || null, obs: v.obs.trim() };
+  if (c) {
+    if (!await gmAtualizar("oc", c.id, dados)) return null;
+    for (const m of GM.mat) if (m.oc_id === c.id) m.oc = dados.numero;     // o banco faz o mesmo (gatilho)
+    if (!sb) gmLocalGravar();
+    return c;
   }
-  if (ok) toast("✓ OC e datas salvas");
+  const nova = { id: uid(), unidade: UN, status: "aberta", autor: quemSou(), ...dados };
+  return (await gmInserir("oc", [nova])) ? nova : null;
+}
+
+/* põe itens numa OC (ou tira, com c = null). A previsão própria some quando a OC tem previsão. */
+async function gmPorNaOC(ids, c) {
+  if (!ids.length) return false;
+  let ok = await gmAtualizar("mat", ids, { oc_id: c ? c.id : null, oc: c ? c.numero : "" });
+  const comPropria = c && c.data_prev ? GM.mat.filter(m => ids.includes(m.id) && m.data_prev).map(m => m.id) : [];
+  if (ok && comPropria.length) ok = await gmAtualizar("mat", comPropria, { data_prev: null });
+  if (ok) {
+    const n = c ? GM.mat.filter(m => m.oc_id === c.id && !m.cancelado).length : 0;
+    toast(c ? `🧾 ${ids.length} item(ns) na ${numOC(c)}${c.fornecedor ? " · " + c.fornecedor : ""}${n > ids.length ? ` (${n} no total)` : ""}` : `${ids.length} item(ns) sem OC`);
+  }
   return ok;
+}
+
+/* nº digitado na linha do item: liga à OC que já existe ou cadastra a nova */
+async function gmOCDigitada(m, num, el) {
+  const atual = gmOcDe(m);
+  const voltar = () => { el.value = atual ? atual.numero : ""; return false; };
+  if (!num) {
+    if (!atual) return false;
+    if (!await confirmar({ titulo: "Tirar o item da OC?", icone: "🧾", ok: "Tirar da OC",
+      texto: `<strong>${esc(m.codigo)}</strong> ${esc(m.descricao)}<br>Sai da <strong>${esc(rotOC(atual))}</strong> e volta para <strong>Sem OC</strong>.` })) return voltar();
+    return gmPorNaOC([m.id], null);
+  }
+  if (atual && atual.numero === num) return false;
+  let c = gmOCs().find(x => x.numero === num);
+  if (c && c.status === "cancelada") { toast(`A ${numOC(c)} está cancelada. Reative-a na tela da OC ou use outro nº.`); return voltar(); }
+  if (!c && atual && !atual.numero) {                 // a OC do item ainda não tinha nº: provavelmente é ele
+    const n = GM.mat.filter(x => x.oc_id === atual.id && !x.cancelado).length;
+    const r = await escolher({ titulo: `OC ${num}`, icone: "🧾",
+      texto: `Este item está numa OC ainda sem nº${atual.fornecedor ? ` (<strong>${esc(atual.fornecedor)}</strong>)` : ""}.`,
+      opcoes: [{ v: "dar", rot: `Dar o nº ${num} a essa OC`, sub: `${n} item(ns) nela` },
+               { v: "nova", rot: "Cadastrar outra OC com esse nº", sub: "só este item muda" }] });
+    if (!r) return voltar();
+    if (r === "dar") {
+      const ok = await gmAtualizar("oc", atual.id, { numero: num });
+      if (ok) { for (const x of GM.mat) if (x.oc_id === atual.id) x.oc = num; toast(`🧾 OC ${num} · ${atual.fornecedor || ""}`); }
+      return ok;
+    }
+  }
+  if (!c) {
+    c = await gmFormOC(null, { numero: num });
+    if (!c) return voltar();
+  }
+  return gmPorNaOC([m.id], c);
+}
+
+/* previsão mudada na linha: só o item (previsão própria) ou a OC inteira */
+async function gmMudarPrev(m, v, el) {
+  const c = gmOcAtiva(m);
+  if (!c) return gmAtualizar("mat", m.id, { data_prev: v });
+  const pend = GM.mat.filter(x => x.oc_id === c.id && !x.cancelado && !x.data_receb && !x.data_entrega && !x.data_prev);
+  if (!v) {                                            // apagou
+    if (m.data_prev) return gmAtualizar("mat", m.id, { data_prev: null });   // volta a seguir a OC
+    if (!await confirmar({ titulo: `Apagar a previsão da ${numOC(c)}?`, icone: "📅", ok: "Apagar previsão",
+      texto: `A previsão vale para a OC inteira (${pend.length} item(ns) a receber).` })) { el.value = c.data_prev || ""; return false; }
+    return gmAtualizar("oc", c.id, { data_prev: null });
+  }
+  if (v === c.data_prev) return m.data_prev ? gmAtualizar("mat", m.id, { data_prev: null }) : false;
+  const outros = pend.filter(x => x.id !== m.id).length;
+  if (!outros && !m.data_prev) return gmAtualizar("oc", c.id, { data_prev: v });   // OC de um item só: a previsão é a dela
+  const r = await escolher({ titulo: `Nova previsão: ${dataBR(v)}`, icone: "📅",
+    texto: `<strong>${esc(m.codigo)}</strong> ${esc(m.descricao)}<br>Este item está na <strong>${esc(rotOC(c))}</strong>${c.data_prev ? `, com previsão ${dataBR(c.data_prev)}` : ""}.`,
+    opcoes: [
+      { v: "oc", rot: `Mudar a OC inteira (${outros + 1} itens a receber)`, sub: "o fornecedor adiou ou confirmou a entrega da OC" },
+      { v: "item", rot: "Só este item (previsão própria)", sub: "entrega parcial: este item chega em outra data" },
+    ] });
+  if (!r) { el.value = gmPrev(m) || ""; return false; }
+  if (r === "item") return gmAtualizar("mat", m.id, { data_prev: v });
+  const ok = await gmAtualizar("oc", c.id, { data_prev: v });
+  if (ok && m.data_prev) await gmAtualizar("mat", m.id, { data_prev: null });
+  return ok;
+}
+
+/* previsão própria em lote (vazio = volta a seguir a OC) */
+async function gmFormPrevLote(ids) {
+  const itens = GM.mat.filter(m => ids.includes(m.id));
+  const ocs = [...new Set(itens.map(m => m.oc_id).filter(Boolean))];
+  const v = await formulario(`Previsão de ${ids.length} item(ns)`, [
+    { nome: "data_prev", rot: "Previsão de entrega", tipo: "date",
+      ajuda: ocs.length ? "Fica como previsão própria destes itens (ex.: saldo que chega depois). Deixe vazio para voltar a seguir a previsão da OC. Para mudar a OC inteira, edite a OC." : "Estes itens ainda não têm OC." },
+  ], { data_prev: itens.length === 1 ? (itens[0].data_prev || "") : "" });
+  if (!v) return false;
+  const ok = await gmAtualizar("mat", ids, { data_prev: v.data_prev || null });
+  if (ok) toast(v.data_prev ? "📅 Previsão própria: " + dataBR(v.data_prev) : "📅 Os itens voltaram a seguir a previsão da OC");
+  return ok;
+}
+
+/* recebimento (chegou do fornecedor). ids: os itens; quem já recebeu fica como está */
+async function gmReceber(ids, titulo = "") {
+  const alvo = GM.mat.filter(m => ids.includes(m.id) && !m.data_receb && !m.cancelado);
+  if (!alvo.length) { toast("Esses itens já estão como recebidos."); return false; }
+  const d = hoje();
+  if (!await confirmar({ titulo: titulo || `Receber ${alvo.length} item(ns)?`, icone: "📥", ok: "Marcar recebido",
+    texto: `Chegaram do fornecedor em <strong>${dataBR(d)}</strong> (dá para corrigir a data em cada linha).`,
+    detalhes: alvo.slice(0, 6).map(m => `<b>${esc(m.codigo)}</b> ${esc(curto(m.descricao, 48))}`).concat(alvo.length > 6 ? [`… e mais ${alvo.length - 6}`] : []) })) return false;
+  const ok = await gmAtualizar("mat", alvo.map(m => m.id), { data_receb: d });
+  if (ok) toast(`📥 ${alvo.length} item(ns) recebido(s)`);
+  return ok;
+}
+
+/* seletor de OC (existente, nova, ou "Sem OC") dentro de uma folha
+   opc.semOC: mostra a opção "Sem OC"; opc.marcarSem: começa marcada */
+function gmHtmlEscolhaOC(selId = "", opc = {}) {
+  const idx = gmIdx();
+  const ocs = gmOCs().filter(c => c.status !== "cancelada").map(c => gmResumoOC(c, idx))
+    .sort((a, b) => ((a.situ === "recebida") - (b.situ === "recebida")) || String(b.c.criado_em || "").localeCompare(String(a.c.criado_em || "")));
+  return `<div class="gm-oc-escolha">
+    <input type="search" class="gm-oc-busca" placeholder="Procurar OC por nº ou fornecedor…" autocomplete="off">
+    <div class="gm-oc-lista">
+      ${opc.semOC ? `<label class="gm-oc-op" data-busca="SEM OC"><input type="radio" name="gm-oc" value="" ${opc.marcarSem && !selId ? "checked" : ""}>
+        <span><b>Sem OC</b> <small>${opc.marcarSem ? "a OC sai depois, por fornecedor" : "tira da OC (volta para Sem OC)"}</small></span></label>` : ""}
+      ${ocs.map(r => `<label class="gm-oc-op" data-busca="${esc(norm([r.c.numero, r.c.fornecedor, r.c.obs].join(" ")))}">
+        <input type="radio" name="gm-oc" value="${esc(r.c.id)}" ${r.c.id === selId ? "checked" : ""}>
+        <span><b>${esc(numOC(r.c))}</b> ${esc(r.c.fornecedor || "")}
+        <small>${r.itens.length} ite${r.itens.length === 1 ? "m" : "ns"}${r.c.data_pedido ? " · pedido " + dataCurta(r.c.data_pedido) : ""}${r.c.data_prev ? " · prev. " + dataCurta(r.c.data_prev) : ""} · ${OC_SITU[r.situ]}</small></span></label>`).join("")
+        || (opc.semOC ? "" : `<div class="gm-os-nenhuma">Nenhuma OC cadastrada ainda.</div>`)}
+    </div>
+    <button type="button" class="btn sec gm-oc-nova">+ Nova OC</button>
+  </div>`;
+}
+function gmLigarEscolhaOC(raiz, opc = {}) {
+  const busca = raiz.querySelector(".gm-oc-busca");
+  const filtrar = () => {
+    const t = norm(busca.value).trim().split(/\s+/).filter(Boolean);
+    raiz.querySelectorAll(".gm-oc-op").forEach(l => { l.hidden = !t.every(x => l.dataset.busca.includes(x)); });
+  };
+  busca.oninput = filtrar;
+  raiz.querySelector(".gm-oc-nova").onclick = async () => {
+    const c = await gmFormOC(null, { numero: /^\d[\d.\-/]*$/.test(busca.value.trim()) ? busca.value.trim() : "",
+                                     fornecedor: /^\d/.test(busca.value.trim()) ? "" : busca.value.trim() });
+    if (!c) return;
+    raiz.querySelector(".gm-oc-escolha").outerHTML = gmHtmlEscolhaOC(c.id, opc);
+    gmLigarEscolhaOC(raiz, opc);
+  };
+}
+
+/* pôr N itens numa OC (ou trocar / tirar) — por lote, pelo menu do item ou pelo grupo "Sem OC" */
+async function gmAtribuirOC(ids) {
+  await gmCarregar();
+  if (GM.semOC) { toast("As OCs ainda não foram instaladas no banco (rode o script 06)."); return false; }
+  const itens = GM.mat.filter(m => ids.includes(m.id));
+  if (!itens.length) return false;
+  const idx = gmIdx();
+  const comOC = itens.filter(m => gmOcDe(m, idx));
+  const atuais = [...new Set(comOC.map(m => m.oc_id))].map(id => idx.ocPor.get(id));
+  const sel = atuais.length === 1 && comOC.length === itens.length ? atuais[0].id : "";
+  const f = folha({ titulo: `OC de ${itens.length} item(ns)`, largura: 640 });
+  f.corpo.innerHTML = `
+    <p class="folha-nota">${comOC.length
+      ? `<strong>${comOC.length}</strong> já ${comOC.length === 1 ? "está" : "estão"} na ${atuais.slice(0, 3).map(c => esc(numOC(c))).join(", ")}${atuais.length > 3 ? "…" : ""}. Escolhendo outra, ${comOC.length === 1 ? "ele muda" : "eles mudam"} de OC.`
+      : "A OC é por fornecedor: escolha a que já existe (pode juntar itens de RMs e OS diferentes) ou cadastre uma nova."}</p>
+    <div class="gm-oc-itens">${itens.slice(0, 8).map(m => `<span><b>${esc(m.codigo)}</b> ${esc(curto(m.descricao, 42))}</span>`).join("")}${itens.length > 8 ? `<span>… e mais ${itens.length - 8}</span>` : ""}</div>
+    ${gmHtmlEscolhaOC(sel, { semOC: comOC.length > 0 })}
+    <div class="folha-acoes"><span class="espacador"></span>
+      <button class="btn sec" data-fechar-folha>Cancelar</button><button class="btn" id="gm-oc-ok">Aplicar</button></div>`;
+  gmLigarEscolhaOC(f.corpo, { semOC: comOC.length > 0 });
+  f.corpo.querySelector("#gm-oc-ok").onclick = () => {
+    const r = f.corpo.querySelector('input[name="gm-oc"]:checked');
+    if (!r) { toast("Escolha a OC (ou cadastre uma nova)."); f.corpo.querySelector(".gm-oc-busca").focus(); return; }
+    f.fechar({ v: r.value });
+  };
+  const r = await f.fechou;
+  if (!r) return false;
+  const c = r.v ? GM.oc.find(x => x.id === r.v) : null;
+  const mudam = itens.filter(m => (m.oc_id || "") !== (c ? c.id : ""));
+  if (!mudam.length) { toast("Nada mudou: os itens já estão " + (c ? "nessa OC." : "sem OC.")); return false; }
+  const trocam = mudam.filter(m => gmOcDe(m, idx)).length;
+  if (!await confirmar({ titulo: c ? `Pôr ${mudam.length} item(ns) na ${numOC(c)}?` : `Tirar ${mudam.length} item(ns) da OC?`, icone: "🧾", ok: c ? "Pôr na OC" : "Tirar da OC",
+    texto: c ? `<strong>${esc(rotOC(c))}</strong>${c.data_pedido ? ` · pedido ${dataBR(c.data_pedido)}` : ""}${c.data_prev ? ` · previsão ${dataBR(c.data_prev)}` : ""}`
+              + (trocam ? `<br>${trocam} item(ns) saem da OC anterior.` : "")
+             : "Os itens voltam para <strong>Sem OC</strong> (aguardando compra).",
+    detalhes: mudam.slice(0, 6).map(m => `<b>${esc(m.codigo)}</b> ${esc(curto(m.descricao, 48))}`).concat(mudam.length > 6 ? [`… e mais ${mudam.length - 6}`] : []) })) return false;
+  return gmPorNaOC(mudam.map(m => m.id), c);
+}
+
+/* ---------------- aba OCs ---------------- */
+function gmAbaOCs(corpo) {
+  if (GM.semOC) { corpo.innerHTML = `<div class="vazio gm-instalar">${GM_SEM_OC}</div>`; return; }
+  const f = gmFiltro();
+  const idx = gmIdx();
+  const q = norm(f.q).trim(), termos = q ? q.split(/\s+/) : [];
+  const todas = gmOCs().map(c => gmResumoOC(c, idx));
+  const cont = { abertas: 0, atrasadas: 0, recebidas: 0, todas: todas.length };
+  const passa = (r, s) => s === "todas" ? true : s === "atrasadas" ? r.atrasados > 0 : s === "recebidas" ? r.situ === "recebida" : ["aberta", "parcial", "vazia"].includes(r.situ);
+  for (const r of todas) for (const s of ["abertas", "atrasadas", "recebidas"]) if (passa(r, s)) cont[s]++;
+  const casa = (r) => !termos.length || termos.every(t => norm([r.c.numero, r.c.fornecedor, r.c.obs, ...r.oss.map(o => o.numero + " " + o.descricao)].join(" ")).includes(t)
+    || r.itens.some(m => norm(m.codigo + " " + m.descricao).includes(t)));
+  const ordemSitu = { aberta: 0, parcial: 0, vazia: 1, recebida: 2, cancelada: 3 };
+  const lista = todas.filter(r => passa(r, f.ocSitu) && casa(r))
+    .sort((a, b) => (b.atrasados - a.atrasados) || (ordemSitu[a.situ] - ordemSitu[b.situ]) || String(a.prox || "9").localeCompare(String(b.prox || "9"))
+      || String(b.c.criado_em || "").localeCompare(String(a.c.criado_em || "")));
+  const semOC = gmMat().filter(m => gmEtapa(m, idx) === "aguardando").filter(m => { const o = idx.osPor.get(m.os_id); return o && o.status !== "cancelada"; }).length;
+  const cartao = (r) => {
+    const c = r.c, n = r.itens.length;
+    return `<a class="cartao oc-cartao situ-${r.situ}${r.atrasados ? " com-atraso" : ""}" href="#/oc/${esc(c.id)}">
+      <span class="sep-topo"><b>${esc(numOC(c))}</b><span class="oc-situ situ-${r.situ}">${OC_SITU[r.situ]}</span></span>
+      <span class="oc-forn">${esc(c.fornecedor || "Fornecedor não informado")}</span>
+      <span class="sub">${c.data_pedido ? "pedido " + dataBR(c.data_pedido) : "sem data do pedido"}${c.data_prev ? ` · previsão <b class="${r.atrasados ? "atraso" : ""}">${dataBR(c.data_prev)}</b>` : ""}${r.atrasados ? ` · <b class="atraso">⚠ ${r.atrasados} atrasado(s)</b>` : ""}</span>
+      <span class="sep-prog"><span class="gm-mini-barra"><i style="width:${n ? r.receb / n * 100 : 0}%"></i></span><small>${r.receb}/${n} recebido(s)</small></span>
+      <span class="sub">${r.oss.slice(0, 3).map(o => esc(o.numero ? "OS " + o.numero : curto(o.descricao, 18))).join(" · ")}${r.oss.length > 3 ? ` +${r.oss.length - 3}` : ""}${r.valor ? (r.oss.length ? " · " : "") + dinheiro(r.valor) : ""}</span>
+    </a>`;
+  };
+  corpo.innerHTML = `
+    ${semOC ? `<a class="faixa-gm oc-faixa" href="#/materiais/itens" id="gm-ver-semoc">🧾 <strong>${semOC} item(ns) sem OC</strong><span>aguardando compra — agrupe por OC e ponha cada um na OC do fornecedor</span><b>Ver →</b></a>` : ""}
+    <div class="gm-filtros"><input type="search" id="gm-q" placeholder="Procurar nº da OC, fornecedor, código, OS…" value="${esc(f.q)}" autocomplete="off"></div>
+    <div class="h-chips gm-sep-filtro">${[["abertas", "A receber"], ["atrasadas", "⚠ Atrasadas"], ["recebidas", "Recebidas"], ["todas", "Todas"]]
+      .map(([k, r]) => `<button class="h-chip ${f.ocSitu === k ? "bc-ativo" : ""}" data-f="${k}">${r} <b>${cont[k]}</b></button>`).join("")}</div>
+    ${lista.length ? `<div class="grade-cartoes">${lista.map(cartao).join("")}</div>`
+      : `<div class="vazio">${todas.length ? "Nenhuma OC com esses filtros." : `Nenhuma OC ainda.<br>Cadastre com <strong>+ Nova OC</strong>, ou digite o nº da OC direto na linha do item (aba Itens).<br>
+          Uma OC pode ter um item só ou vários, conforme o fornecedor.`}</div>`}`;
+  const qEl = $("#gm-q", corpo);
+  let t = null;
+  qEl.oninput = () => { clearTimeout(t); t = setTimeout(() => { f.q = qEl.value; gmGuardarFiltro(f); gmAbaOCs(corpo); const n = $("#gm-q", corpo); n.focus(); n.setSelectionRange(n.value.length, n.value.length); }, 220); };
+  corpo.onclick = (e) => {
+    const b = e.target.closest("[data-f]");
+    if (b) { f.ocSitu = b.dataset.f; gmGuardarFiltro(f); gmAbaOCs(corpo); return; }
+    if (e.target.closest("#gm-ver-semoc")) { f.agrupar = "oc"; f.etapa = "aguardando"; f.q = ""; gmGuardarFiltro(f); }
+  };
+}
+
+/* ---------------- tela da OC — #/oc/<id> ---------------- */
+function telaOC(app, id) {
+  GM.tela = () => { if (location.hash === "#/oc/" + id) telaOC(app, id); };
+  if (!GM.pronto) { app.innerHTML = gmAvisoCarga(); gmLigarCab(); if (!GM.semTabelas && !GM.erro) gmCarregar().then(() => GM.tela && GM.tela()); return; }
+  const c = GM.oc.find(x => x.id === id);
+  if (!c) { app.innerHTML = `<div class="vazio">OC não encontrada (pode ter sido excluída).<br><br><a class="btn" href="#/materiais/ocs">Ver as OCs</a></div>`; return; }
+  if (!garantirUnidade(c.unidade || "UIS3")) return;
+  const idx = gmIdx();
+  const r = gmResumoOC(c, idx), n = r.itens.length, pend = n - r.receb;
+  const ativa = c.status !== "cancelada";
+  app.innerHTML = `
+    <div class="pagina-titulo gm-titulo">
+      <a class="btn sec mini" href="#/materiais/ocs">← OCs</a>
+      <h1>${esc(c.numero ? "OC " + c.numero : "OC sem nº")}</h1>
+      <span class="oc-situ grande situ-${r.situ}">${OC_SITU[r.situ]}</span>
+      <span class="espacador"></span>
+      <button class="btn sec" id="oc-editar">Editar</button>
+      ${ativa ? `<button class="btn sec" id="oc-receber" ${pend ? "" : "disabled"}>📥 Receber</button><button class="btn" id="oc-add">+ Itens</button>` : ""}
+    </div>
+    <div class="os-cabecalho oc-cab${r.atrasados ? " com-atraso" : ""}">
+      <div class="os-cab-desc">${esc(c.fornecedor || "Fornecedor não informado")}</div>
+      <div class="os-cab-proj">Pedido <b>${dataBR(c.data_pedido) || "—"}</b> · Previsão de entrega <b class="${r.atrasados ? "atraso" : ""}">${dataBR(c.data_prev) || "—"}</b>${c.obs ? ` · ${esc(c.obs)}` : ""}</div>
+    </div>
+    <div class="resumo-blocos gm-resumo">
+      <div class="resumo-num"><div class="rot">Itens</div><div class="val">${n}</div></div>
+      <div class="resumo-num"><div class="rot">Valor (RMs)</div><div class="val">${dinheiro(r.valor)}</div></div>
+      <div class="resumo-num"><div class="rot">Recebidos</div><div class="val">${r.receb}<small>/${n}</small></div></div>
+      <div class="resumo-num${r.atrasados ? " alerta" : ""}"><div class="rot">A receber</div><div class="val">${pend}${r.atrasados ? `<small class="atraso"> ⚠ ${r.atrasados} atrasado(s)</small>` : ""}</div></div>
+    </div>
+    ${n ? `<div class="os-barra grande">${r.receb ? `<i class="et-recebido" style="flex:${r.receb}"><span>Recebidos ${r.receb}</span></i>` : ""}${pend ? `<i class="et-comprado" style="flex:${pend}"><span>A receber ${pend}</span></i>` : ""}</div>` : ""}
+    <div class="secao-titulo">Itens da OC${r.oss.length ? ` <small>— ${r.oss.length} OS</small>` : ""}</div>
+    <div id="oc-itens"></div>
+    <div class="os-rodape">
+      ${ativa ? `<button class="btn sec" id="oc-cancelar">Cancelar OC</button>` : `<button class="btn sec" id="oc-reativar">Reativar OC</button>`}
+      <button class="btn perigo" id="oc-excluir">Excluir OC</button>
+      <span class="os-autor">${c.autor ? "Cadastrada por " + esc(c.autor) : ""}${c.criado_em ? " em " + esc(dataHoraBR(c.criado_em)) : ""}</span>
+    </div>`;
+  gmAbaItens($("#oc-itens"), { oc: c.id });
+  const on = (sel, fn) => { const b = $(sel); if (b) b.onclick = fn; };
+  on("#oc-editar", async () => { if (await gmFormOC(c)) telaOC(app, id); });
+  on("#oc-add", async () => { if (await gmAddItensOC(c)) telaOC(app, id); });
+  on("#oc-receber", async () => {
+    const pendentes = r.itens.filter(m => !gmRecebido(m, gmEtapa(m, idx))).map(m => m.id);
+    const selec = pendentes.filter(x => GM.sel.has(x));
+    let ids = pendentes;
+    if (selec.length && selec.length < pendentes.length) {
+      const e = await escolher({ titulo: "Receber o quê?", icone: "📥", texto: `${esc(numOC(c))} · ${esc(c.fornecedor || "")}`,
+        opcoes: [{ v: "sel", rot: `Só os selecionados (${selec.length})`, sub: "entrega parcial" }, { v: "tudo", rot: `Tudo o que falta (${pendentes.length})`, sub: "a OC chegou completa" }] });
+      if (!e) return;
+      ids = e === "sel" ? selec : pendentes;
+    }
+    if (await gmReceber(ids, ids.length === pendentes.length ? `Receber a ${numOC(c)} (${ids.length} item(ns))?` : "")) { GM.sel.clear(); telaOC(app, id); }
+  });
+  on("#oc-cancelar", async () => {
+    if (!await confirmar({ titulo: `Cancelar a ${numOC(c)}?`, icone: "⊘", ok: "Cancelar OC", cancelar: "Voltar",
+      texto: `Os ${n} item(ns) voltam para <strong>Sem OC</strong> (aguardando compra) e podem ir para outra OC. A OC fica registrada como cancelada.` })) return;
+    if (await gmAtualizar("oc", c.id, { status: "cancelada" })) { toast(`${numOC(c)} cancelada`); telaOC(app, id); }
+  });
+  on("#oc-reativar", async () => { if (await gmAtualizar("oc", c.id, { status: "aberta" })) telaOC(app, id); });
+  on("#oc-excluir", async () => {
+    if (!await confirmar({ titulo: `Excluir a ${numOC(c)}?`, icone: "🗑", perigo: true, ok: "Excluir OC",
+      texto: `<strong>${esc(rotOC(c))}</strong>${n ? `<br>Os <strong>${n}</strong> item(ns) continuam nas OS e voltam para <strong>Sem OC</strong>.` : ""}<br>Não dá para desfazer.` })) return;
+    if (await gmExcluir("oc", [c.id])) { toast("OC excluída"); location.hash = "#/materiais/ocs"; }
+  });
+}
+
+/* pôr itens na OC a partir da tela dela: os sem OC primeiro; os de outras OCs, se pedir */
+async function gmAddItensOC(c) {
+  const idx = gmIdx();
+  const livres = gmMat().filter(m => !m.cancelado && !m.data_entrega && m.oc_id !== c.id)
+    .filter(m => { const o = idx.osPor.get(m.os_id); return o && o.status !== "cancelada"; });
+  if (!livres.length) { toast("Não há outros itens vinculados a OS."); return false; }
+  const porOS = new Map();
+  for (const m of livres) { if (!porOS.has(m.os_id)) porOS.set(m.os_id, []); porOS.get(m.os_id).push(m); }
+  const f = folha({ titulo: `Pôr itens na ${numOC(c)}${c.fornecedor ? " · " + c.fornecedor : ""}`, largura: 760 });
+  f.corpo.innerHTML = `
+    <p class="folha-nota">Marque os itens que vieram nesta OC. Podem ser de RMs e OS diferentes.</p>
+    <div class="gm-vinc-passo"><input type="search" class="gm-s-busca" placeholder="Filtrar por código, descrição, RM, OS…" autocomplete="off">
+      <label class="gm-todos"><input type="checkbox" id="gm-a-outras"> mostrar itens que já têm outra OC</label></div>
+    <div class="gm-s-grupos">${[...porOS.entries()].map(([oid, ms]) => {
+      const o = idx.osPor.get(oid);
+      return `<div class="gm-s-grupo" data-os="${esc(oid)}">
+        <label class="gm-s-rm"><input type="checkbox" data-g="${esc(oid)}"><b>${esc(rotOS(o))}</b><small>${ms.length} item(ns) · marcar todos</small></label>
+        ${ms.map(m => { const oc = gmOcDe(m, idx), rm = listas.find(l => l.id === m.lista_id);
+          return `<label class="gm-v-item${oc ? " outra-oc" : ""}" data-busca="${esc(norm([m.codigo, m.descricao, rm ? rm.titulo : "", o ? o.numero : "", o ? o.descricao : ""].join(" ")))}" ${oc ? "hidden" : ""}>
+          <input type="checkbox" data-m="${esc(m.id)}" data-de="${esc(oid)}">
+          <span class="gm-v-cod">${esc(m.codigo)}</span><span class="gm-v-desc">${esc(m.descricao)}<small>${rm ? "RM " + esc(curto(rm.titulo, 40)) : ""}${oc ? ` · <b>já na ${esc(numOC(oc))}</b>` : ""}</small></span>
+          <span class="gm-v-qtd">${fmtNum(+m.qtd) || 0} ${esc(m.un)}</span></label>`; }).join("")}
+      </div>`;
+    }).join("")}</div>
+    <div class="folha-acoes"><span class="gm-v-resumo" id="gm-a-res"></span><span class="espacador"></span>
+      <button class="btn sec" data-fechar-folha>Cancelar</button><button class="btn" id="gm-a-ok">Pôr na OC</button></div>`;
+  const visivel = () => {
+    const outras = f.corpo.querySelector("#gm-a-outras").checked;
+    const t = norm(f.corpo.querySelector(".gm-s-busca").value).trim().split(/\s+/).filter(Boolean);
+    f.corpo.querySelectorAll(".gm-v-item").forEach(l => { l.hidden = (!outras && l.classList.contains("outra-oc")) || !t.every(x => l.dataset.busca.includes(x)); if (l.hidden) l.querySelector("input").checked = false; });
+    f.corpo.querySelectorAll(".gm-s-grupo").forEach(g => { g.hidden = !g.querySelector(".gm-v-item:not([hidden])"); });
+    resumo();
+  };
+  const resumo = () => {
+    const n = f.corpo.querySelectorAll("input[data-m]:checked").length;
+    f.corpo.querySelector("#gm-a-res").textContent = `${n} item(ns) marcados`;
+    f.corpo.querySelectorAll("input[data-g]").forEach(cb => {
+      const filhos = [...f.corpo.querySelectorAll(`.gm-v-item:not([hidden]) input[data-de="${CSS.escape(cb.dataset.g)}"]`)];
+      const k = filhos.filter(x => x.checked).length;
+      cb.checked = k === filhos.length && k > 0; cb.indeterminate = k > 0 && k < filhos.length;
+    });
+  };
+  f.corpo.onchange = (e) => {
+    const cb = e.target;
+    if (cb.id === "gm-a-outras") { visivel(); return; }
+    if (cb.dataset.g) f.corpo.querySelectorAll(`.gm-v-item:not([hidden]) input[data-de="${CSS.escape(cb.dataset.g)}"]`).forEach(x => { x.checked = cb.checked; });
+    resumo();
+  };
+  f.corpo.querySelector(".gm-s-busca").oninput = visivel;
+  visivel();
+  f.corpo.querySelector("#gm-a-ok").onclick = () => {
+    const ids = [...f.corpo.querySelectorAll("input[data-m]:checked")].map(x => x.dataset.m);
+    if (!ids.length) { toast("Marque ao menos um item."); return; }
+    f.fechar(ids);
+  };
+  const ids = await f.fechou;
+  if (!ids) return false;
+  const trocam = ids.filter(id => gmOcDe(idx.matPor.get(id), idx)).length;
+  if (!await confirmar({ titulo: `Pôr ${ids.length} item(ns) na ${numOC(c)}?`, icone: "🧾", ok: "Pôr na OC",
+    texto: `<strong>${esc(rotOC(c))}</strong>${c.data_prev ? ` · previsão ${dataBR(c.data_prev)}` : ""}${trocam ? `<br>${trocam} item(ns) saem da OC anterior.` : ""}` })) return false;
+  return gmPorNaOC(ids, c);
 }
 
 /* ============================================================
@@ -670,12 +1177,8 @@ async function gmVincularRM(listaId = null) {
     }).join("")}</div>
     <div class="gm-vinc-passo"><span class="gm-passo">2</span><h3>OS do Sadege</h3>${proj ? `<span class="gm-dica-proj">RM do projeto 📁 ${esc(proj.nome)}</span>` : ""}</div>
     ${gmHtmlEscolhaOS(sugestaoOS ? sugestaoOS.id : "")}
-    <details class="gm-vinc-extra"><summary><span class="gm-passo">3</span> OC e datas agora <small>(opcional — dá para preencher depois)</small></summary>
-      <div class="gm-v-datas">
-        <label>Ordem de compra (OC)<input id="gm-v-oc" inputmode="numeric" autocomplete="off"></label>
-        <label>Data do pedido<input type="date" id="gm-v-ped"></label>
-        <label>Previsão de entrega<input type="date" id="gm-v-prev"></label>
-      </div></details>
+    ${GM.semOC ? "" : `<details class="gm-vinc-extra"><summary><span class="gm-passo">3</span> OC agora <small>(opcional — normalmente a OC sai depois, por fornecedor)</small></summary>
+      ${gmHtmlEscolhaOC("", { semOC: true, marcarSem: true })}</details>`}
     <div class="folha-acoes"><span class="gm-v-resumo" id="gm-v-resumo"></span><span class="espacador"></span>
       <button class="btn sec" data-fechar-folha>Cancelar</button><button class="btn" id="gm-v-ok">Vincular</button></div>`;
   const marcados = () => [...f.corpo.querySelectorAll(".gm-v-item input:checked:not(:disabled)")].map(x => x.dataset.k);
@@ -689,6 +1192,7 @@ async function gmVincularRM(listaId = null) {
   f.corpo.querySelector("#gm-v-todos").onchange = (e) => { f.corpo.querySelectorAll(".gm-v-item input:not(:disabled)").forEach(x => { x.checked = e.target.checked; }); resumo(); };
   f.corpo.querySelector(".gm-v-itens").onchange = resumo;
   gmLigarEscolhaOS(f.corpo, () => gmFormOS(null, { descricao: proj ? proj.nome : L.titulo, projetoId: L.projetoId || "" }));
+  if (!GM.semOC) gmLigarEscolhaOC(f.corpo, { semOC: true, marcarSem: true });
   resumo();
   f.corpo.querySelector("#gm-v-ok").onclick = async () => {
     const ks = marcados();
@@ -696,19 +1200,20 @@ async function gmVincularRM(listaId = null) {
     if (!ks.length) { toast("Marque ao menos um item."); return; }
     if (!r) { toast("Escolha a OS (ou crie uma nova)."); f.corpo.querySelector(".gm-os-busca").focus(); return; }
     const o = GM.os.find(x => x.id === r.value);
-    const oc = f.corpo.querySelector("#gm-v-oc").value.trim(), ped = f.corpo.querySelector("#gm-v-ped").value, prev = f.corpo.querySelector("#gm-v-prev").value;
+    const rOC = f.corpo.querySelector('input[name="gm-oc"]:checked');
+    const oc = rOC && rOC.value ? GM.oc.find(x => x.id === rOC.value) : null;
     const p = o.projeto_id ? projetos.find(x => x.id === o.projeto_id) : null;
     const ok = await confirmar({ titulo: "Confirmar vínculo", icone: "🔗", ok: "Vincular",
       texto: `<strong>${ks.length}</strong> ${ks.length === 1 ? "item" : "itens"} da RM <strong>${esc(L.titulo)}</strong>
         ${ks.length === livres.length ? "(a RM inteira)" : "(picados)"} vão para a <strong>${esc(rotOS(o))}</strong>
         — ${p ? "projeto 📁 " + esc(p.nome) : "OS solta"}.`,
-      detalhes: [oc ? `OC: <strong>${esc(oc)}</strong>` : "", ped ? `Pedido: ${dataBR(ped)}` : "", prev ? `Previsão: ${dataBR(prev)}` : ""].filter(Boolean) });
+      detalhes: oc ? [`OC: <strong>${esc(rotOC(oc))}</strong>${oc.data_prev ? ` · previsão ${dataBR(oc.data_prev)}` : ""}`] : [] });
     if (!ok) return;
     const mapa = new Map(itens);
     const novos = ks.map(k => { const i = mapa.get(k); return {
       id: uid(), unidade: UN, os_id: o.id, lista_id: L.id, item_chave: k,
       codigo: String(i.codigo || ""), descricao: String(i.descricao || ""), un: String(i.un || ""),
-      qtd: +i.qtd || 0, preco: +i.preco || 0, oc, data_pedido: ped || null, data_prev: prev || null, autor: quemSou() }; });
+      qtd: +i.qtd || 0, preco: +i.preco || 0, autor: quemSou(), ...(oc ? { oc_id: oc.id, oc: oc.numero } : {}) }; });
     if (await gmInserir("mat", novos)) {
       f.fechar(true);
       toast(`🔗 ${novos.length} item(ns) vinculado(s) à ${rotOS(o)}`);
@@ -749,11 +1254,12 @@ function telaOS(app, id) {
     <div class="resumo-blocos gm-resumo">
       <div class="resumo-num"><div class="rot">Itens</div><div class="val">${tot}</div></div>
       <div class="resumo-num"><div class="rot">Valor</div><div class="val">${dinheiro(r.valor)}</div></div>
+      <div class="resumo-num"><div class="rot">Recebidos</div><div class="val">${r.recebidos}<small>/${tot}</small></div></div>
       <div class="resumo-num"><div class="rot">Entregues</div><div class="val">${r.cont.entregue}<small>/${tot}</small></div></div>
       <div class="resumo-num${r.atrasados ? " alerta" : ""}"><div class="rot">Próxima previsão</div><div class="val">${r.prox ? dataBR(r.prox) : "—"}${r.atrasados ? `<small class="atraso"> ⚠ ${r.atrasados} atrasado(s)</small>` : ""}</div></div>
     </div>
     ${tot ? `<div class="os-barra grande">${ETAPAS.map(e => r.cont[e.id] ? `<i class="et-${e.id}" style="flex:${r.cont[e.id]}"><span>${e.curto} ${r.cont[e.id]}</span></i>` : "").join("")}</div>` : ""}
-    <div class="secao-titulo">Itens</div>
+    <div class="secao-titulo">Itens <small>— por OC</small></div>
     <div id="os-itens"></div>
     <div class="secao-titulo">Listas de separação</div>
     ${seps.length ? `<div class="grade-cartoes">${seps.map(s => gmCartaoSep(s, idx)).join("")}</div>` : `<div class="vazio">Nenhuma lista de separação com itens desta OS.</div>`}
@@ -762,11 +1268,11 @@ function telaOS(app, id) {
       <button class="btn perigo" id="os-excluir">Excluir OS</button>
       <span class="os-autor">${o.autor ? "Criada por " + esc(o.autor) : ""}${o.criado_em ? " em " + esc(dataHoraBR(o.criado_em)) : ""}</span>
     </div>`;
-  gmAbaItens($("#os-itens"), o.id);
+  gmAbaItens($("#os-itens"), { os: o.id });
   $("#os-editar").onclick = async () => { if (await gmFormOS(o)) telaOS(app, id); };
   $("#os-vinc").onclick = () => gmVincularRM();
   $("#os-sep").onclick = () => {
-    const ids = r.itens.filter(m => { const e = gmEtapa(m, idx); return ETAPA_ORDEM[e] <= ETAPA_ORDEM.comprado; }).map(m => m.id);
+    const ids = r.itens.filter(m => { const e = gmEtapa(m, idx); return ETAPA_ORDEM[e] <= ETAPA_ORDEM.recebido; }).map(m => m.id);
     gmNovaSeparacao(ids.length ? ids : null, o.id);
   };
   const conc = $("#os-concluir");
@@ -850,7 +1356,7 @@ async function gmNovaSeparacao(preIds = null, osId = null) {
         <label class="gm-s-rm"><input type="checkbox" data-rm="${esc(lid)}" ${ms.every(marcar) ? "checked" : ""}>
           <b>RM ${esc(l ? curto(l.titulo, 50) : "removida")}</b><small>${ms.length} disponível(is) · marcar a RM inteira (lote)</small></label>
         ${ms.map(m => { const o = idx.osPor.get(m.os_id); return `<label class="gm-v-item"><input type="checkbox" data-m="${esc(m.id)}" data-de="${esc(lid)}" ${marcar(m) ? "checked" : ""}>
-          <span class="gm-v-cod">${esc(m.codigo)}</span><span class="gm-v-desc">${esc(m.descricao)}<small>${esc(rotOS(o))}${m.oc ? " · OC " + esc(m.oc) : ""}${m.data_prev ? " · prev. " + dataCurta(m.data_prev) : ""}</small></span>
+          <span class="gm-v-cod">${esc(m.codigo)}</span><span class="gm-v-desc">${esc(m.descricao)}<small>${esc(rotOS(o))}${gmOcAtiva(m, idx) ? " · " + esc(numOC(gmOcAtiva(m, idx))) : " · sem OC"}${m.data_receb ? ` · <b class="ok">✓ recebido</b>` : gmPrev(m, idx) ? " · prev. " + dataCurta(gmPrev(m, idx)) : ""}</small></span>
           <span class="gm-v-qtd">${fmtNum(+m.qtd) || 0} ${esc(m.un)}</span></label>`; }).join("")}
       </div>`;
     }).join("")}</div>
@@ -908,16 +1414,17 @@ function telaSeparacao(app, id) {
     const m = idx.matPor.get(x.mat_id) || {};
     const o = idx.osPor.get(m.os_id);
     const rm = listas.find(l => l.id === m.lista_id);
-    const atr = m.data_prev && m.data_prev < hoje() && !x.separado;
+    const c = gmOcAtiva(m, idx), prev = gmPrev(m, idx), ped = gmPedido(m, idx);
+    const atr = prev && prev < hoje() && !x.separado && !m.data_receb;
     const qs = x.qtd_sep != null && +x.qtd_sep !== +x.qtd;
     return `<li class="sep-item${x.separado ? " ok" : ""}${qs ? " parcial" : ""}" data-si="${esc(x.id)}">
       <button class="sep-check" ${podeMarcar ? "" : "disabled"} aria-pressed="${x.separado}" aria-label="${x.separado ? "Desmarcar" : "Marcar como separado"}">${x.separado ? "✓" : ""}</button>
       <div class="sep-info">
         <div class="sep-l1"><b class="sep-cod">${esc(m.codigo || "—")}</b><span class="sep-qtd">${fmtNum(+x.qtd) || 0} <small>${esc(m.un || "")}</small></span></div>
         <div class="sep-desc">${esc(m.descricao || "")}</div>
-        <div class="sep-meta">${m.oc ? `<span>OC <b>${esc(m.oc)}</b></span>` : `<span class="sem">sem OC</span>`}
-          ${m.data_pedido ? `<span>pedido ${dataCurta(m.data_pedido)}</span>` : ""}
-          ${m.data_prev ? `<span class="${atr ? "atraso" : ""}">prev. ${dataCurta(m.data_prev)}</span>` : ""}
+        <div class="sep-meta">${c ? `<span>OC <b>${esc(c.numero || "s/ nº")}</b>${c.fornecedor ? " · " + esc(curto(c.fornecedor, 22)) : ""}</span>` : `<span class="sem">sem OC</span>`}
+          ${m.data_receb ? `<span class="ok">✓ recebido ${dataCurta(m.data_receb)}</span>`
+            : `${ped ? `<span>pedido ${dataCurta(ped)}</span>` : ""}${prev ? `<span class="${atr ? "atraso" : ""}">prev. ${dataCurta(prev)}</span>` : ""}`}
           <span>${esc(o ? (o.numero ? "OS " + o.numero : curto(o.descricao, 24)) : "")}</span></div>
         ${x.separado ? `<div class="sep-quem">✓ ${esc(x.separado_por || "")} ${x.separado_em ? "· " + esc(dataHoraBR(x.separado_em)) : ""}${qs ? ` · separado <b>${fmtNum(+x.qtd_sep)}</b> de ${fmtNum(+x.qtd)}` : ""}</div>` : ""}
         ${x.obs ? `<div class="sep-obs">📝 ${esc(x.obs)}</div>` : ""}
@@ -1019,11 +1526,12 @@ function telaSeparacao(app, id) {
   });
   on("#sep-enviar", async () => {
     if (!its.length) { toast("A lista está vazia."); return; }
-    const semOC = its.filter(x => !(idx.matPor.get(x.mat_id) || {}).oc).length;
+    const semOC = its.filter(x => !gmOcAtiva(idx.matPor.get(x.mat_id) || {}, idx)).length;
+    const naoReceb = its.filter(x => { const m = idx.matPor.get(x.mat_id) || {}; return !m.data_receb; }).length;
     const resp = s.responsavel ? `<strong>${esc(s.responsavel)}</strong>` : "a equipe do almoxarifado";
     if (!await confirmar({ titulo: "Enviar ao almoxarifado?", icone: "📋", ok: "Enviar",
       texto: `${its.length} item(ns) para ${resp} separar. Depois de enviada, a lista aparece no celular do almoxarifado e os itens ficam na etapa <strong>Em separação</strong>.`
-        + (semOC ? `<br><br>⚠ <strong>${semOC}</strong> item(ns) ainda sem OC.` : "") })) return;
+        + (naoReceb ? `<br><br>⚠ <strong>${naoReceb}</strong> item(ns) ainda não recebido(s) do fornecedor${semOC ? ` (${semOC} sem OC)` : ""}: o almoxarifado pode não ter.` : "") })) return;
     if (await gmAtualizar("sep", s.id, { status: "enviada", enviada_em: new Date().toISOString() })) {
       toast("📋 Enviada ao almoxarifado");
       telaSeparacao(app, id);
@@ -1122,9 +1630,11 @@ async function gmPdfSeparacao(id, compartilhar) {
       const q = fmtNum(+x.qtd) || "0";
       pag.drawText(limpa(q), { x: xs[3] + larguras[3] - 1.2 * MM - fB.widthOfTextAtSize(q, 9), y: cy, size: 9, font: fB });
       pag.drawText(limpa(m.un || ""), { x: xs[4] + 1.2 * MM, y: cy, size: 8, font: fR });
-      pag.drawText(limpa(m.oc || "-"), { x: xs[5] + 1.2 * MM, y: cy, size: 8, font: fR });
-      pag.drawText(limpa(dataBR(m.data_pedido) || "-"), { x: xs[6] + 1.2 * MM, y: cy, size: 7.5, font: fR });
-      pag.drawText(limpa(dataBR(m.data_prev) || "-"), { x: xs[7] + 1.2 * MM, y: cy, size: 7.5, font: fR, color: m.data_prev && m.data_prev < hoje() && !x.separado ? VERM : undefined });
+      const c = gmOcAtiva(m, idx), prev = gmPrev(m, idx);
+      pag.drawText(limpa(c ? (c.numero || "s/ n") : "-"), { x: xs[5] + 1.2 * MM, y: cy, size: 8, font: fR });
+      pag.drawText(limpa(dataBR(gmPedido(m, idx)) || "-"), { x: xs[6] + 1.2 * MM, y: cy, size: 7.5, font: fR });
+      pag.drawText(limpa(m.data_receb ? "chegou" : (dataBR(prev) || "-")), { x: xs[7] + 1.2 * MM, y: cy, size: 7.5, font: m.data_receb ? fB : fR,
+        color: m.data_receb ? rgb(0.12, 0.48, 0.27) : prev && prev < hoje() && !x.separado ? VERM : undefined });
       pag.drawText(limpa(o.numero || "-"), { x: xs[8] + 1.2 * MM, y: cy, size: 7.5, font: fR });
       y -= alt;
       pag.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.4, color: LINHA });

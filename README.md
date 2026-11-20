@@ -33,11 +33,24 @@ Menu **Gestão de Materiais** (`#/materiais`). Fluxo:
 
 1. Conclua a RM e toque em **🔗 Vincular à OS** (na RM, ou em *Vincular RM à OS* na Gestão). Vincule a **RM inteira** (lote) ou só alguns itens (**picados**).
 2. Escolha a **OS do Sadege** ou crie uma nova: nº, descrição (tratada como nome do projeto), disciplina e projeto (ou **OS solta**). Um projeto pode ter várias OS, uma por disciplina.
-3. Preencha **OC, data do pedido e previsão de entrega**, direto na linha ou em lote.
-4. Monte a **lista de separação** para o almoxarifado (por RM inteira ou itens picados) e toque em **Enviar ao almoxarifado**. Sai também em **PDF** (A4, checklist) e pelo **Compartilhar** (WhatsApp, e-mail).
-5. O almoxarifado marca no celular; a engenharia vê na hora. **Concluir separação** e, quando o material sair, **Marcar entregue**.
+3. Ponha cada item na **OC do fornecedor** (veja abaixo).
+4. Quando o material chega do fornecedor, **📥 Receber** (a OC inteira ou só parte dela).
+5. Monte a **lista de separação** para o almoxarifado (por RM inteira ou itens picados) e toque em **Enviar ao almoxarifado**. Sai também em **PDF** (A4, checklist) e pelo **Compartilhar** (WhatsApp, e-mail).
+6. O almoxarifado marca no celular; a engenharia vê na hora. **Concluir separação** e, quando o material sair, **Marcar entregue**.
 
-Etapas de cada item: **Sem OC → Comprado → Em separação → Separado → Entregue** (previsão vencida em vermelho). O **Quadro de OS** coloca cada OS na coluna da etapa mais atrasada dos itens dela. OS de projeto aparecem primeiro, com a faixa do projeto. A aba **Itens** é a lista operacional, com seleção em lote. O resumo do projeto mostra as OS dele.
+Etapas de cada item: **Sem OC → Comprado → Recebido → Em separação → Separado → Entregue**. ⚠ = previsão vencida e ainda não recebido. O **Quadro de OS** coloca cada OS na coluna da etapa mais atrasada dos itens dela. OS de projeto aparecem primeiro, com a faixa do projeto. A aba **Itens** é a lista operacional, com seleção em lote, agrupada **por OS** ou **por OC**. O resumo do projeto mostra as OS dele.
+
+### OC por fornecedor
+
+A OC é um cadastro próprio (`req_oc`): **nº, fornecedor, data do pedido e previsão de entrega**. Ela é emitida por fornecedor, então pode ter **um item só** ou **vários**, inclusive de RMs e OS diferentes.
+
+- **Digitando na linha do item** (aba Itens): nº de uma OC que já existe → o item entra nela na hora. Nº novo → abre o cadastro da OC (fornecedor, pedido, previsão).
+- **Em lote**: marque os itens → **🧾 OC** → escolha a OC (busca por nº ou fornecedor) ou **+ Nova OC**. Agrupando **Por OC**, o grupo **Sem OC** fica em cima, com o botão **Pôr numa OC**.
+- **Aba OCs**: cada OC com fornecedor, previsão, recebidos/total e as OS que ela atende; filtros *A receber*, *Atrasadas*, *Recebidas*. **+ Nova OC** cadastra a OC e depois **+ Itens** põe os itens nela.
+- **Previsão**: é da OC e vale para todos os itens dela. Mudando a previsão na linha de um item, o app pergunta: **a OC inteira** (o fornecedor adiou) ou **só este item** (entrega parcial / saldo → previsão própria).
+- **Receber**: na tela da OC, tudo o que falta ou só os selecionados. A data de recebimento fica em cada item.
+- **Cancelar OC** devolve os itens para *Sem OC* e guarda a OC; **Excluir** apaga a OC (os itens continuam nas OS, sem OC).
+- Uma OC cadastrada sem nº (só o fornecedor) ganha o nº quando ele é digitado na linha de um item dela.
 
 **Almoxarifado:** crie o login da pessoa (Supabase → Authentication → Add user) e cadastre-a em **Cadastros** com papel **Almoxarifado**. Ela entra direto nas listas de separação, não baixa o banco e não aparece como assinante.
 
@@ -56,9 +69,10 @@ Etapas de cada item: **Sem OC → Comprado → Em separação → Separado → E
 | `03_pacote_publicar.sql` | `req_pacote_publicar()` (chama a Edge Function pelo `pg_net`) |
 | `04_gestao_materiais.sql` | tabelas `req_os`, `req_mat`, `req_sep`, `req_sep_itens` e papel **almoxarifado** |
 | `05_regras_filtro_v2.sql` | regras v2 do filtro (códigos de frigorífico com número, carnes em qualquer posição, rações, varejo), com exceção para soja/UIS, e reclassificação |
+| `06_oc_fornecedor.sql` | OC como cadastro (`req_oc`: nº, fornecedor, pedido, previsão), `req_mat.oc_id` e `data_receb`; o nº em texto no item é mantido pelo banco |
 | `functions/pacote-itens/` | Edge Function que gera o pacote `.tsv.gz` |
 
-Os de 01 a 04 são aditivos: não apagam nem alteram dados existentes. O 05 só muda o `escopo` dos itens (núcleo/outros); itens já usados em RM nunca saem do núcleo. Todos já foram aplicados no projeto **Requisicoes**.
+Os de 01 a 04 e o 06 são aditivos: não apagam nem alteram dados existentes. O 05 só muda o `escopo` dos itens (núcleo/outros); itens já usados em RM nunca saem do núcleo. Todos já foram aplicados no projeto **Requisicoes**.
 
 ## Busca de códigos
 
