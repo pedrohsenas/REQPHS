@@ -3592,11 +3592,12 @@ function telaHistorico(app) {
       return `<mark>${esc(r.codigo.slice(0, c.length))}</mark>${esc(r.codigo.slice(c.length))}`;
     return esc(r.codigo || "—");
   };
-  /* repetida = mesma requisição da linha de cima: só o título, sem repetir descrição/etiquetas */
+  /* repetida = mesma requisição da linha de cima: só o título, sem repetir descrição e projeto.
+     O status (✔ concluída) vai em TODAS as linhas: sem ele, a linha repetida ficava igual a uma RM em andamento. */
   const linha = (r, termos, repetida) => {
     const desc = (r.l.descricao || "").trim();
     const mostraDesc = !repetida && desc && !(r.mm && norm(desc) === norm(DESC_MM_PADRAO));
-    const concl = !repetida && r.l.status === "concluida";
+    const concl = r.l.status === "concluida";
     const proj = repetida ? "" : r.projeto;
     return `<tr${repetida ? ' class="h-rep"' : ""}>
       <td class="h-data">${esc(dataBR(r.data)) || "—"}</td>
