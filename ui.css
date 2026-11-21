@@ -552,6 +552,8 @@ body.perfil-almox .status-banco{display:none}
 .gm-grupo-semoc td{background:var(--et-aguardando-s) !important; box-shadow:inset 4px 0 0 var(--et-aguardando)}
 .gm-grupo .btn.mini{margin-left:8px; vertical-align:1px}
 .gm-in.herdada{color:#3d4a8f; background:#f6f7fd; font-style:italic}
+.gm-in.incompleta{border-color:#d99a00 !important; background:#fff8e6}            /* data pela metade (ano "0020"): ainda não salvou */
+.gm-c-dt .gm-in[data-teclado]{box-shadow:0 0 0 2px rgba(229,26,65,.18)}         /* digitando: salva ao sair do campo (Tab/Enter) */
 .gm-in.oc-cancelada{text-decoration:line-through; color:var(--cinza)}
 .gm-prev-propria{color:var(--et-recebido); font-weight:700}
 .sep-meta .ok, .gm-v-desc .ok{color:var(--et-entregue); font-weight:700}

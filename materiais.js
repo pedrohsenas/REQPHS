@@ -45,6 +45,12 @@ const gmMat = () => GM.mat.filter(m => (m.unidade || "UIS3") === UN);
 const gmSep = () => GM.sep.filter(s => (s.unidade || "UIS3") === UN);
 const gmOCs = () => GM.oc.filter(c => (c.unidade || "UIS3") === UN);
 const dataCurta = (iso) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || "")); return m ? `${m[3]}/${m[2]}` : ""; };
+/* Data completa e plausível (ano 2000–2099). Ao digitar o ano no teclado, o navegador dispara `change` já no 1º dígito
+   ("0002-11-21"), depois "0020-…", "0202-…": só a 4ª tecla dá uma data de verdade. Vazio também vale (apagou). */
+const GM_DATA_MIN = "2000-01-01", GM_DATA_MAX = "2099-12-31";
+const dataCompleta = (v) => !v || /^20\d\d-\d\d-\d\d$/.test(v);
+const gmInData = (campo, valor, extra = "", title = "") =>
+  `<input type="date" class="gm-in${extra}" data-campo="${campo}" value="${esc(valor || "")}" min="${GM_DATA_MIN}" max="${GM_DATA_MAX}" title="${title}">`;
 const numSep = (s) => "SEP-" + String(s.numero || "—").padStart(4, "0");
 const rotOS = (o) => o ? ((o.numero ? "OS " + o.numero : "OS s/ nº") + (o.descricao ? " · " + o.descricao : "")) : "OS removida";
 const numOC = (c) => c ? (c.numero ? "OC " + c.numero : "OC s/ nº") : "";
@@ -449,10 +455,11 @@ function gmAbaItens(corpo, fixo = null) {
       <td class="gm-c-oc"><label class="gm-rot-m">OC</label>
         <input class="gm-in gm-oc-in${c && !ativa ? " oc-cancelada" : ""}" data-campo="oc" list="gm-dl-oc" value="${esc(c ? c.numero : "")}" placeholder="${c ? "OC s/ nº" : "nº OC"}" inputmode="numeric" autocomplete="off" ${GM.semOC ? "disabled" : ""}>
         ${c ? `<div class="gm-sub"><a href="#/oc/${esc(c.id)}">${ativa ? esc(c.fornecedor || "fornecedor?") : "OC cancelada"}</a>${ativa && ped ? " · ped. " + dataCurta(ped) : ""}</div>` : ""}</td>
-      <td class="gm-c-dt"><label class="gm-rot-m">Previsão${herdada ? " (da OC)" : propria ? " própria" : ""}</label><input type="date" class="gm-in${atr ? " vencida" : ""}${herdada ? " herdada" : ""}" data-campo="data_prev" value="${esc(prev)}" title="${herdada ? "Previsão da OC" : propria ? "Previsão própria deste item (a da OC é " + (dataBR(c.data_prev) || "vazia") + ")" : "Previsão de entrega"}">
+      <td class="gm-c-dt"><label class="gm-rot-m">Previsão${herdada ? " (da OC)" : propria ? " própria" : ""}</label>${gmInData("data_prev", prev, (atr ? " vencida" : "") + (herdada ? " herdada" : ""),
+          herdada ? "Previsão da OC" : propria ? "Previsão própria deste item (a da OC é " + (dataBR(c.data_prev) || "vazia") + ")" : "Previsão de entrega")}
         ${propria ? `<div class="gm-sub gm-prev-propria">própria</div>` : ""}</td>
-      <td class="gm-c-dt"><label class="gm-rot-m">Recebido</label><input type="date" class="gm-in" data-campo="data_receb" value="${esc(m.data_receb || "")}" title="Chegou do fornecedor"></td>
-      <td class="gm-c-dt"><label class="gm-rot-m">Entregue</label><input type="date" class="gm-in" data-campo="data_entrega" value="${esc(m.data_entrega || "")}" title="Saiu do almoxarifado para a frente de serviço"></td>
+      <td class="gm-c-dt"><label class="gm-rot-m">Recebido</label>${gmInData("data_receb", m.data_receb, "", "Chegou do fornecedor")}</td>
+      <td class="gm-c-dt"><label class="gm-rot-m">Entregue</label>${gmInData("data_entrega", m.data_entrega, "", "Saiu do almoxarifado para a frente de serviço")}</td>
       <td class="gm-c-menu"><button class="btn sec mini" data-menu="${esc(m.id)}" aria-label="Mais ações">⋯</button></td>
     </tr>`;
   };
@@ -540,7 +547,20 @@ function gmAbaItens(corpo, fixo = null) {
       redesenhar(); return;
     }
     if (!el.classList.contains("gm-in")) return;
+    if (el.type === "date") {
+      // Pelo teclado o navegador dispara `change` a cada tecla (dia "2" → 02, ano "2" → 0002…). Nesse modo a gente só
+      // salva quando a pessoa sai do campo (Tab, Enter ou clique fora). Pelo calendário/celular não há teclas: salva na hora.
+      el.classList.toggle("incompleta", !dataCompleta(el.value));
+      if (el.dataset.teclado) return;
+    }
+    salvarCampo(el);
+  };
+  const salvarCampo = async (el) => {
     if (document.querySelector(".conf, .modal-form")) return;      // já há uma pergunta aberta para esta mudança
+    if (el.type === "date") {
+      if (!dataCompleta(el.value)) { el.value = el.defaultValue; el.classList.remove("incompleta"); return; }   // ficou pela metade: volta ao salvo
+      if (el.value === el.defaultValue) return;                      // nada mudou de fato
+    }
     const id = el.closest("tr").dataset.id, campo = el.dataset.campo;
     const m = GM.mat.find(x => x.id === id); if (!m) return;
     let ok = false;
@@ -557,6 +577,24 @@ function gmAbaItens(corpo, fixo = null) {
     }
     if (ok) { if (campo !== "data_receb") toast("✓ Salvo"); redesenhar(); }
   };
+  const ehData = (el) => !!(el && el.classList && el.classList.contains("gm-in") && el.type === "date");
+  corpo.onkeydown = (e) => {
+    const el = e.target;
+    if (!ehData(el)) return;
+    if (e.key === "Escape") { el.value = el.defaultValue; el.classList.remove("incompleta"); delete el.dataset.teclado; el.blur(); e.preventDefault(); return; }
+    if (e.key === "Enter") { e.preventDefault(); el.blur(); return; }  // concluir: o focusout salva
+    if (/^\d$|^(Backspace|Delete|Arrow(Up|Down|Left|Right))$/.test(e.key)) el.dataset.teclado = "1";   // edição pelo teclado (Tab só anda dia→mês→ano)
+  };
+  // `onfocusout` não existe como propriedade (só via addEventListener); como o `corpo` sobrevive aos redesenhos, troca o ouvinte anterior
+  if (corpo._gmFocusout) corpo.removeEventListener("focusout", corpo._gmFocusout);
+  corpo._gmFocusout = (e) => {
+    const el = e.target;
+    if (!ehData(el)) return;
+    const teclado = el.dataset.teclado; delete el.dataset.teclado;
+    if (teclado) salvarCampo(el);                                       // o change ficou em espera; salva agora
+    else if (!dataCompleta(el.value)) { el.value = el.defaultValue; el.classList.remove("incompleta"); }
+  };
+  corpo.addEventListener("focusout", corpo._gmFocusout);
   corpo.onclick = async (e) => {
     const ag = e.target.closest("[data-agr]");
     if (ag) { f.agrupar = ag.dataset.agr; gmGuardarFiltro(f); redesenhar(); return; }
