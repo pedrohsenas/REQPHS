@@ -755,11 +755,41 @@ async function gmOCDigitada(m, num, el) {
       return ok;
     }
   }
-  if (!c) {
-    c = await gmFormOC(null, { numero: num });
-    if (!c) return voltar();
-  }
+  if (c) return gmEntrarEmOCExistente(m, c, voltar);
+  c = await gmFormOC(null, { numero: num });
+  if (!c) return voltar();
   return gmPorNaOC([m.id], c);
+}
+
+/* nº digitado é de uma OC que já existe: o normal é o item herdar fornecedor e previsão da OC (uma OC tem um fornecedor
+   e um prazo únicos). A exceção — entrega parcial — entra na OC com previsão própria. voltar(): desfaz o campo da linha. */
+async function gmEntrarEmOCExistente(m, c, voltar) {
+  const atual = gmOcDe(m);
+  const outros = GM.mat.filter(x => x.oc_id === c.id && !x.cancelado && x.id !== m.id).length;
+  const dados = [c.fornecedor ? `fornecedor <strong>${esc(c.fornecedor)}</strong>` : "",
+                 c.data_pedido ? `pedido <strong>${dataBR(c.data_pedido)}</strong>` : "",
+                 c.data_prev ? `previsão de entrega <strong>${dataBR(c.data_prev)}</strong>` : ""].filter(Boolean);
+  const r = await escolher({ titulo: `${numOC(c)} já cadastrada`, icone: "🧾",
+    texto: `<strong>${esc(m.codigo)}</strong> ${esc(m.descricao)}<br>
+      Esta OC já foi cadastrada ${outros ? `para <strong>${outros}</strong> outro(s) item(ns)` : "anteriormente"}${dados.length ? `, com ${dados.join(", ")}` : ", ainda sem fornecedor e previsão"}.
+      Confirme para puxar automaticamente os dados do fornecedor e a data de previsão da OC para este item.${atual && atual.id !== c.id ? `<br>Ele sai da <strong>${esc(rotOC(atual))}</strong>.` : ""}`,
+    opcoes: [
+      { v: "oc", rot: "Usar os dados da OC", sub: "o normal: uma OC tem um só fornecedor e uma só previsão"
+          + (m.data_prev && c.data_prev && m.data_prev !== c.data_prev ? ` · a previsão própria (${dataBR(m.data_prev)}) é substituída` : "") },
+      { v: "propria", rot: "Mesma OC, mas este item chega em outra data", sub: "exceção: o fornecedor adianta ou atrasa só parte dos itens — informe a previsão deste item" },
+    ] });
+  if (!r) return voltar();
+  if (r === "oc") return gmPorNaOC([m.id], c);
+  const v = await formulario(`Previsão deste item · ${numOC(c)}`, [
+    { nome: "data_prev", rot: "Previsão de entrega deste item", tipo: "date", attrs: `min="${GM_DATA_MIN}" max="${GM_DATA_MAX}"`,
+      ajuda: `${c.data_prev ? "A OC prevê " + dataBR(c.data_prev) : "A OC ainda não tem previsão"}; deixe vazio para seguir a da OC. `
+           + `Fornecedor (${c.fornecedor || "não informado"}) e data do pedido continuam os da OC. A data em que o item de fato chegou vai em Recebido.` },
+  ], { data_prev: m.data_prev || "" }, (x) => x.data_prev && !dataCompleta(x.data_prev) ? "Informe uma data válida (ano com 4 dígitos)." : "");
+  if (!v) return voltar();
+  const propria = v.data_prev && v.data_prev !== c.data_prev ? v.data_prev : null;   // igual à da OC = herda
+  const ok = await gmAtualizar("mat", m.id, { oc_id: c.id, oc: c.numero, data_prev: propria });
+  if (ok) toast(`🧾 ${numOC(c)}${c.fornecedor ? " · " + c.fornecedor : ""}${propria ? ` · previsão própria ${dataBR(propria)}` : ""}`);
+  return ok;
 }
 
 /* previsão mudada na linha: só o item (previsão própria) ou a OC inteira */
@@ -883,8 +913,12 @@ async function gmAtribuirOC(ids) {
   const mudam = itens.filter(m => (m.oc_id || "") !== (c ? c.id : ""));
   if (!mudam.length) { toast("Nada mudou: os itens já estão " + (c ? "nessa OC." : "sem OC.")); return false; }
   const trocam = mudam.filter(m => gmOcDe(m, idx)).length;
-  if (!await confirmar({ titulo: c ? `Pôr ${mudam.length} item(ns) na ${numOC(c)}?` : `Tirar ${mudam.length} item(ns) da OC?`, icone: "🧾", ok: c ? "Pôr na OC" : "Tirar da OC",
+  const comPropria = c && c.data_prev ? mudam.filter(m => m.data_prev && m.data_prev !== c.data_prev).length : 0;
+  const jaTem = c ? GM.mat.filter(m => m.oc_id === c.id && !m.cancelado && !mudam.some(x => x.id === m.id)).length : 0;
+  if (!await confirmar({ titulo: c ? `Pôr ${mudam.length} item(ns) na ${numOC(c)}?` : `Tirar ${mudam.length} item(ns) da OC?`, icone: "🧾", ok: c ? "Usar os dados da OC" : "Tirar da OC",
     texto: c ? `<strong>${esc(rotOC(c))}</strong>${c.data_pedido ? ` · pedido ${dataBR(c.data_pedido)}` : ""}${c.data_prev ? ` · previsão ${dataBR(c.data_prev)}` : ""}`
+              + (jaTem ? `<br>Esta OC já foi cadastrada para ${jaTem} outro(s) item(ns): os itens puxam o fornecedor e a previsão de entrega dela.` : "")
+              + (comPropria ? `<br>${comPropria} item(ns) perdem a previsão própria e passam a seguir a da OC (para manter, use <b>Previsão</b> em lote depois).` : "")
               + (trocam ? `<br>${trocam} item(ns) saem da OC anterior.` : "")
              : "Os itens voltam para <strong>Sem OC</strong> (aguardando compra).",
     detalhes: mudam.slice(0, 6).map(m => `<b>${esc(m.codigo)}</b> ${esc(curto(m.descricao, 48))}`).concat(mudam.length > 6 ? [`… e mais ${mudam.length - 6}`] : []) })) return false;
